@@ -138,7 +138,8 @@ KernelManager& KernelManager::instance() {
 }
 
 void KernelManager::compile(const std::string& kernel_label, const std::string& kernel_name,
-                            const std::string& code, const std::string& filename) {
+                            const std::string& code, const std::string& filename,
+                            const std::vector<std::string>& extra_options) {
   std::lock_guard<std::mutex> lock_guard_(lock_);
 
   // Choose whether to compile to PTX or cubin
@@ -159,6 +160,7 @@ void KernelManager::compile(const std::string& kernel_label, const std::string& 
     opts.push_back(concat_strings("--gpu-architecture=sm_", compile_sm_arch));
   }
   opts.push_back(concat_strings("-I", cuda::include_directory(true)));
+  opts.insert(opts.end(), extra_options.begin(), extra_options.end());
   std::vector<const char*> opts_ptrs;
   for (const auto& opt : opts) {
     opts_ptrs.push_back(opt.c_str());

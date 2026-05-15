@@ -115,7 +115,8 @@ class KernelManager {
    *                         primarily for debugging
    */
   void compile(const std::string &kernel_label, const std::string &kernel_name,
-               const std::string &code, const std::string &filename);
+               const std::string &code, const std::string &filename,
+               const std::vector<std::string> &extra_options = {});
 
   /*! \brief Whether CUDA kernel has been compiled for CUDA device
    *
