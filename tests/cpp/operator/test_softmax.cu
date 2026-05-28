@@ -194,21 +194,37 @@ void test_upper_softmax(DType dtype) {
 
 }  // namespace
 
+// Dispatch a 16-bit float dtype to a templated test body. Mirrors
+// TRANSFORMER_ENGINE_TYPE_SWITCH_16BIT but uses the test harness's own fp16/bf16
+// aliases so we don't have to include common.h here -- doing so would make the
+// test's Tensor type ambiguous with transformer_engine::Tensor.
+#define SOFTMAX_TEST_DISPATCH_16BIT(dtype, fn)              \
+  switch (dtype) {                                          \
+    case DType::kFloat16:                                   \
+      fn<test::fp16>(dtype);                                \
+      break;                                                \
+    case DType::kBFloat16:                                  \
+      fn<test::bf16>(dtype);                                \
+      break;                                                \
+    default:                                                \
+      GTEST_FAIL() << "Unsupported 16-bit dtype for test";  \
+  }
+
 class SoftmaxApiTestSuite : public ::testing::TestWithParam<DType> {};
 
 TEST_P(SoftmaxApiTestSuite, ScaledSoftmax) {
   const DType dtype = GetParam();
-  TRANSFORMER_ENGINE_TYPE_SWITCH_16BIT(dtype, Type, test_scaled_softmax<Type>(dtype););
+  SOFTMAX_TEST_DISPATCH_16BIT(dtype, test_scaled_softmax);
 }
 
 TEST_P(SoftmaxApiTestSuite, MaskedSoftmax) {
   const DType dtype = GetParam();
-  TRANSFORMER_ENGINE_TYPE_SWITCH_16BIT(dtype, Type, test_masked_softmax<Type>(dtype););
+  SOFTMAX_TEST_DISPATCH_16BIT(dtype, test_masked_softmax);
 }
 
 TEST_P(SoftmaxApiTestSuite, UpperTriangularSoftmax) {
   const DType dtype = GetParam();
-  TRANSFORMER_ENGINE_TYPE_SWITCH_16BIT(dtype, Type, test_upper_softmax<Type>(dtype););
+  SOFTMAX_TEST_DISPATCH_16BIT(dtype, test_upper_softmax);
 }
 
 INSTANTIATE_TEST_SUITE_P(OperatorTest, SoftmaxApiTestSuite,

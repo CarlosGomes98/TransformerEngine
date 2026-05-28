@@ -13,6 +13,45 @@ combination of build-time impact, implementation simplicity, and runtime risk. T
 and simplest wins come first; harder or header-heavy migrations are later even when their
 raw build-time impact is high.
 
+## Reprioritization based on build-time findings (2026-05-28)
+
+The full build-time analysis in `BUILD_TIME_ISSUE.md` measured per-TU compile cost on two
+configurations and changed the recommended ordering. Key results, on a 32-core workstation:
+
+- **Wall-clock is set by the single longest TU, not total CPU work.** Migrating a TU to NVRTC
+  only shrinks wall-clock until the *next* longest TU becomes the ceiling. So the value of any
+  migration is bounded by the gap to the next critical-path TU, and migrating a TU that is not
+  on the critical path buys ~0 wall-clock.
+- **The priority order is architecture-dependent.**
+  - **sm_100a + `--use_fast_math` (the config we actually ship):** activation TUs dominate the
+    tail — `gelu.cu` 323 s, `relu.cu` 281 s, `swiglu.cu` 198 s — while everything else sits on a
+    ~95–115 s plateau. Migrating activations alone drops wall-clock **324 s → ~113 s (−65%)**.
+    Nothing else in the NVRTC track comes close. After activations, the next ceiling is
+    normalization + `cast_transpose_fusion.cu` + `cast.cu` at ~95–115 s, then the
+    `fused_attn_*.cu` cuDNN-frontend bound (~100 s) which is **not** NVRTC-amenable.
+  - **sm_89:** the curve is a flat ~90–105 s plateau (`cast_transpose_fusion.cu` 105 s,
+    `ln_fwd` 100 s, `gelu` 94 s, `fused_attn_fp8` 88 s …). No single migration moves wall-clock
+    much, and the `fused_attn` cuDNN-frontend bound caps the NVRTC-only track at ~10% e2e.
+- **Implication: activation NVRTC should come first, not last.** The originally-planned order
+  (softmax → normalization → cast_transpose_fusion → activation) put activation dead last,
+  which is exactly backwards for the shipping (sm_100a + fast-math) config. The phase order
+  below has been revised accordingly. Softmax is retained as the proven reference pattern, not
+  as a build-time win in its own right.
+
+### Phase status snapshot
+
+| Phase | Area | Status | Measured build-time result |
+| --- | --- | --- | --- |
+| 1 | Fused softmax RTC | **Done** (commit `0b655b679`) | ~4× per-TU (3 TUs 38.6 s → 19.8 s sequential); ~0 s wall — not on critical path. Reference pattern for later phases. |
+| 2 | Normalization RTC registry | **In progress** (this branch) | Static-fanout removal floor measured: 4 norm TUs 67 s → 30 s wall when built alone; full-build wall −6.8 s on sm_89 (bounded by `cast_transpose_fusion.cu`). Real win requires trimming the host TU include footprint (cudnn/cutlass) and wiring the RTC dispatch backend. |
+| 3→1' | Activation + FP8/MXFP8 quantize RTC | **Highest priority for sm_100a** | Predicted wall 324 s → ~113 s on sm_100a + fast-math. Promoted ahead of remaining phases for the shipping config. |
+| 4+ | NVFP4/blockwise, swizzle, hadamard, multi-tensor | Pending | Re-measure after activations + norm land; pick the new ceiling by measured cost. |
+
+Note on environment: `BUILD_TIME_ISSUE.md` numbers were taken with CUDA 13.1 + g++-12. The
+active validation container uses CUDA 12.8 + g++-12 on an RTX 6000 Ada (sm_89); sm_100a is
+built here compile-only (no Blackwell GPU) to confirm it compiles and to track its build-time
+delta.
+
 ## Current State
 
 TE already has an NVRTC path in `transformer_engine/common/util/rtc.{h,cpp}` with:
@@ -92,7 +131,7 @@ KernelManager extension policy:
 - Defer CUDA graph capture changes until a migrated path is actually reached during capture
   or needs an explicit guard.
 
-## Phase 1: Fused Softmax RTC
+## Phase 1: Fused Softmax RTC — DONE (commit `0b655b679`)
 
 Why first:
 
@@ -124,7 +163,7 @@ Acceptance criteria:
 - Build timing shows reduced compile time for `common/fused_softmax/*`.
 - First-call compile latency is logged and acceptable for representative shapes.
 
-## Phase 2: Normalization RTC Registry
+## Phase 2: Normalization RTC Registry — IN PROGRESS (this branch)
 
 Why next:
 
@@ -315,15 +354,26 @@ Acceptance criteria:
 
 ## Suggested MR Sequence
 
-1. Baseline report plus lightweight RTC conventions.
-2. Fused softmax RTC.
-3. Normalization RTC registry.
-4. Activation plus FP8/MXFP8 quantize RTC, first covering common delayed-scaling and MXFP8
-   paths.
+Revised per the 2026-05-28 build-time findings. The original sequence is kept in parentheses
+for reference; the change is promoting activation ahead of the remaining phases because it is
+the dominant wall-clock cost on the shipping (sm_100a + fast-math) config.
+
+1. Baseline report plus lightweight RTC conventions. **(done)**
+2. Fused softmax RTC — proven reference pattern. **(done, commit `0b655b679`)**
+3. Normalization RTC registry. **(in progress, this branch)**
+4. **Activation plus FP8/MXFP8 quantize RTC — highest wall-clock impact on sm_100a; do this as
+   soon as the norm RTC conventions are validated.** Start with common delayed-scaling and
+   MXFP8 paths. (Was phase 4; promoted in priority.)
 5. NVFP4 and blockwise quantize-transpose RTC.
 6. Swizzle RTC.
 7. Hadamard transform RTC feasibility and first common kernels.
 8. Multi-tensor and remaining measured hotspots.
+
+Rationale for not literally reordering the files: softmax (2) and normalization (3) are
+already implemented/in-flight and establish the RTC dispatch + source-string-header
+conventions that activation (4) reuses. Finishing norm then immediately doing activation
+captures the big sm_100a win without throwing away in-progress work. If starting fresh today
+for the shipping config, activation would be phase 2.
 
 ## Validation Matrix
 
