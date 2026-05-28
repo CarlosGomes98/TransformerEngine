@@ -246,6 +246,46 @@ Acceptance criteria:
 - Representative PyTorch/JAX activation and quantize tests.
 - Build timing shows reduction in `activation/*` and cast/quantize-heavy TUs.
 
+### Migration surface map (from 2026-05-28 code scoping)
+
+The activation TUs are tiny (`activation/{gelu,relu,swiglu,glu}.cu`, ~450 LOC total) but
+fan out enormously through the quantize dispatch:
+
+- Host wrappers: `activation/activation_template.h` (`act_fn` / `dact_fn` /
+  `gated_act_fn` / `dgated_act_fn`), each calling into `cast/dispatch/quantize.cuh`
+  and `cast/dispatch/gated.cuh`.
+- Device math ops: `util/math.h` (`gelu`, `dgelu`, `silu`, `relu`, `qgelu`, `srelu`,
+  `sigmoid`, gated/clamped variants) — small, NVRTC-friendly, enum-selectable.
+- The actual instantiated kernels live in `cast/fp8/quantize_fp8.cuh`
+  (`cast_fp8_2D_kernel`, `quantize<IS_DBIAS,IS_DACT,IS_ACT,ParamOP,OP>`) and
+  `cast/mxfp8/quantize_mxfp8.cuh`, using `util/vectorized_pointwise.h` and
+  `util/ptx.cuh`.
+- Fanout axes: activation OP (~5) × {fwd, bwd-dbias-dact} × scaling mode
+  {delayed-FP8, MXFP8, high-precision cast} × in/out dtype (~10) ≈ 900 specializations.
+- **NVRTC cut line:** package the `cast_fp8_2D_kernel` / mxfp8 `quantize` device body
+  + `math.h` + `vectorized_pointwise.h` + `ptx.cuh` + `cast/core/common.cuh` as RTC
+  source strings; select the activation OP by enum (the `cast_transpose_fusion` RTC
+  pattern), not by function-pointer template arg. Host-only headers that must NOT
+  enter the RTC TU: `transformer_engine/*.h` public API, `transpose/cast_transpose.h`,
+  cuDNN/CUTLASS.
+
+### Staged sub-plan (each sub-stage builds + tests on the sm_89 box, build-checks sm_100a)
+
+- **3a — Plain (non-gated) activation, high-precision output (no quantization).**
+  Smallest verifiable slice; exercises the OP-by-enum RTC dispatch end to end without
+  the FP8 scaling machinery. Validate with `test_act.cu` (BF16/FP16/FP32 out).
+- **3b — Plain activation, FP8 delayed (per-tensor) scaling**, fwd then
+  `quantize_dbias_dact` bwd. Validate with `test_act.cu` (FP8 out) +
+  `test_cast_dbias_dgelu.cu`. FP8 runs on sm_89.
+- **3c — Gated activations** (geglu/reglu/swiglu/qgeglu/sreglu), fwd+bwd. Validate
+  with `test_cast_gated_swiglu.cu`.
+- **3d — MXFP8 1D scaling.** Validate with `test_cast_mxfp8*` (note: MXFP8 paths are
+  largely Hopper/Blackwell; on the sm_89 validation box these may skip — build-check
+  for sm_100a is the primary signal here).
+
+Keep `NVTE_BUILD_LEGACY_STATIC_*` style fallback gating per sub-stage so each can be
+A/B'd and rolled back independently, exactly as done for softmax and norm.
+
 ## Phase 4: NVFP4 and Blockwise Quantize-Transpose RTC
 
 Why after Phase 4:
