@@ -116,6 +116,12 @@ void launch_rmsnorm_fwd_general_(LaunchParams<ForwardKernelParams> &launch_param
       norm_##NORM_TYPE##_##NORM_STAGE##_##LAUNCH_TYPE##_##HIDDEN_SIZE##_##WTYPE##_##ITYPE##_##OTYPE##_##CTYPE); \
   }  // namespace
 
+#ifndef NVTE_BUILD_LEGACY_STATIC_NORM
+#define NVTE_BUILD_LEGACY_STATIC_NORM 1
+#endif
+
+#if NVTE_BUILD_LEGACY_STATIC_NORM
+
 // Create rmsnorm tuned launch function and register. Macro signature:
 //  HIDDEN_SIZE, WTYPE, ITYPE, OTYPE, CTYPE, CTAS_PER_ROW, WARPS_M, WARPS_N, BYTES_PER_LDG
 
@@ -211,3 +217,5 @@ REGISTER_NORM_LAUNCHER(RMSNorm, Forward, general, 8192, fp16, fp16, fp16, fp32, 
 REGISTER_NORM_LAUNCHER(RMSNorm, Forward, general, 8192, fp32, fp32, fp16, fp32, 1, 4, 16);
 REGISTER_NORM_LAUNCHER(RMSNorm, Forward, general, 8192, bf16, bf16, bf16, fp32, 1, 4, 16);
 REGISTER_NORM_LAUNCHER(RMSNorm, Forward, general, 8192, fp32, fp32, bf16, fp32, 1, 4, 16);
+
+#endif  // NVTE_BUILD_LEGACY_STATIC_NORM

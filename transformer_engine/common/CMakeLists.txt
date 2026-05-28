@@ -443,6 +443,17 @@ target_compile_definitions(transformer_engine
                            PRIVATE
                            NVTE_BUILD_LEGACY_STATIC_FUSED_SOFTMAX=$<BOOL:${NVTE_BUILD_LEGACY_STATIC_FUSED_SOFTMAX}>)
 
+# Default ON: build all REGISTER_NORM_LAUNCHER static instantiations in the
+# LayerNorm/RMSNorm fwd/bwd .cu files. Set OFF to measure the build-time floor
+# (skips template instantiation; runtime norm dispatch will fail until the
+# NVRTC migration lands).
+option(NVTE_BUILD_LEGACY_STATIC_NORM
+       "Compile legacy static norm REGISTER_NORM_LAUNCHER template dispatch"
+       ON)
+target_compile_definitions(transformer_engine
+                           PRIVATE
+                           NVTE_BUILD_LEGACY_STATIC_NORM=$<BOOL:${NVTE_BUILD_LEGACY_STATIC_NORM}>)
+
 # Compiler options
 set(nvte_sources_with_fast_math)
 list(APPEND nvte_sources_with_fast_math fused_softmax/scaled_masked_softmax.cu

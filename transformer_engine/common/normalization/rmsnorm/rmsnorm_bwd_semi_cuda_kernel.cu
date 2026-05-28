@@ -147,6 +147,12 @@ void launch_rmsnorm_bwd_general_(LaunchParams<BackwardKernelParams> &launch_para
       norm_##NORM_TYPE##_##NORM_STAGE##_##LAUNCH_TYPE##_##HIDDEN_SIZE##_##WTYPE##_##ITYPE##_##OTYPE##_##CTYPE); \
   }  // namespace
 
+#ifndef NVTE_BUILD_LEGACY_STATIC_NORM
+#define NVTE_BUILD_LEGACY_STATIC_NORM 1
+#endif
+
+#if NVTE_BUILD_LEGACY_STATIC_NORM
+
 // Create rmsnorm bwd tuned launch function and register. Macro signature:
 //  HIDDEN_SIZE, WTYPE, ITYPE, OTYPE, CTYPE, CTAS_PER_ROW, ...
 //                             WARPS_M, WARPS_N, BYTES_PER_LDG, BYTES_PER_LDG_FINAL
@@ -313,3 +319,5 @@ REGISTER_NORM_LAUNCHER(RMSNorm, BackwardAdd, general, 4096, bf16, bf16, bf16, fp
                        true);
 REGISTER_NORM_LAUNCHER(RMSNorm, BackwardAdd, general, 4096, bf16, fp32, bf16, fp32, 1, 4, 16, 4,
                        true);
+
+#endif  // NVTE_BUILD_LEGACY_STATIC_NORM
