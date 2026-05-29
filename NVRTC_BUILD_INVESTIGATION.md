@@ -647,3 +647,61 @@ Two notable results:
 (The intermittent NVRTC-compile-volume crash from the previous section is an sm_89
 runtime-compilation observation; the sm_100a notes above are pure build-time and
 done on the sm_89 host with no kernel execution.)
+
+## Phase 3 (activation NVRTC) — first draft
+
+Scope of this first draft: migrate the **non-gated** activation **forward (`act_fn`)
+and backward (`dact_fn`)** to NVRTC, with the activation selected by a runtime enum,
+behind a new `NVTE_BUILD_LEGACY_STATIC_ACTIVATION` option (default **ON** = unchanged
+legacy behavior). Gated / grouped / `quantize_dbias_*` paths remain on the static
+dispatch for now (next sub-stages). MXFP8 / NVFP4 / columnwise outputs are not yet
+covered by the RTC path and intentionally `NVTE_CHECK`-reject.
+
+New files:
+
+- `activation/rtc/activation_kernel.cu` — self-contained NVRTC source: a scalar
+  grid-stride elementwise kernel `act_kernel<ACT, IS_BWD, IType, OType>` (compute in
+  fp32) with optional FP8 per-tensor scale/amax/scale_inv. Includes only the
+  NVRTC-safe `utils.cuh` + `util/math.h` (the device activation ops). Reuses the
+  existing 8-header `KernelManager::compile` header set, so no rtc.cpp change needed.
+- `activation/rtc_dispatch.{h,cpp}` — host dispatch: maps `NVTE_Activation_Type` →
+  fwd/bwd RTC ids, builds the NVRTC name expression, compiles-once/caches, zeroes
+  amax for FP8, and launches.
+
+Changes: `activation_template.h` `act_fn`/`dact_fn` take a leading
+`NVTE_Activation_Type ACT` non-type template param and `#if`-route to the RTC
+dispatch when the flag is OFF; the 10 non-gated call sites in
+`gelu/relu/swiglu.cu` updated to pass the enum; CMake option + string header +
+`rtc_dispatch.cpp` source wired.
+
+### Validation (sm_89, RTX 6000 Ada, CUDA 12.8)
+
+- **flag ON (default/legacy):** full build clean — confirms the template-signature
+  change and new dispatch TU don't disturb the default path.
+- **flag OFF (RTC):** full build clean. Ran the C++ operator tests against the RTC
+  `.so`:
+  - non-gated GELU/SILU/RELU/QGELU/SRELU fwd+bwd, all in/out dtype combos incl. FP8
+    e4m3/e5m2 output: **250/250 PASS** (RTC path, amax/scale correct).
+  - gated GeGLU/SwiGLU/ReGLU/GLU/etc. (still static under flag OFF): **286/286 PASS**.
+
+### sm_100a build check (compile-only; CUDA 12.8 + gcc-13)
+
+With the activation flag OFF, the sm_100a compile of the activation TUs reached:
+
+- `activation/rtc_dispatch.cpp.o` — **compiles** (160 KB).
+- `relu.cu`, `swiglu.cu`, `glu.cu` — **compile** (still 10–23 MB: the gated/grouped
+  fanout I did not migrate yet remains).
+- `gelu.cu` — **fails with an internal compiler error (Segmentation fault) in
+  `cast/mxfp8/gated_mxfp8.cuh:705`** — i.e. in the *gated MXFP8* path, which is part
+  of the gated activation fanout NOT in this first draft's scope and is **unchanged**
+  by it. This is the same pre-existing CUDA 12.8 / gcc-13 compiler crash that hit
+  `gelu.cu` before this work (see earlier "sm_100a build check" section); removing the
+  non-gated act/dact fanout moved the crash from act/dact to the gated MXFP8
+  instantiation, but did not introduce it. Notably `relu.cu`/`swiglu.cu` also
+  instantiate gated MXFP8 yet compile, so it is a specific-instantiation compiler bug.
+
+Conclusion: the first-draft NVRTC activation code itself compiles for sm_100a; a full
+sm_100a library build on *this* toolchain is still blocked by that pre-existing
+compiler ICE in the (not-yet-migrated) gated MXFP8 path. This should be re-checked on
+the GB200's newer CUDA toolkit (where the ICE may be fixed), and is the motivation for
+extending the migration to the gated/grouped paths in the next sub-stage (3c).

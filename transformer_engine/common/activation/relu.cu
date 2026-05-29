@@ -10,7 +10,7 @@
 void nvte_relu(const NVTETensor input, NVTETensor output, cudaStream_t stream) {
   NVTE_API_CALL(nvte_relu);
   using namespace transformer_engine;
-  act_fn<fp32, Empty, relu<fp32, fp32>>(input, output, stream);
+  act_fn<NVTE_Activation_Type::RELU, fp32, Empty, relu<fp32, fp32>>(input, output, stream);
 }
 
 void nvte_group_relu(const NVTEGroupedTensor input, NVTEGroupedTensor output, cudaStream_t stream) {
@@ -25,7 +25,7 @@ void nvte_drelu(const NVTETensor grad, const NVTETensor input, NVTETensor output
                 cudaStream_t stream) {
   NVTE_API_CALL(nvte_drelu);
   using namespace transformer_engine;
-  dact_fn<fp32, Empty, drelu<fp32, fp32>>(grad, input, output, stream);
+  dact_fn<NVTE_Activation_Type::RELU, fp32, Empty, drelu<fp32, fp32>>(grad, input, output, stream);
 }
 
 void nvte_group_drelu(const NVTEGroupedTensor grad, const NVTEGroupedTensor input,
@@ -87,7 +87,7 @@ void nvte_dreglu(const NVTETensor grad, const NVTETensor input, NVTETensor outpu
 void nvte_srelu(const NVTETensor input, NVTETensor output, cudaStream_t stream) {
   NVTE_API_CALL(nvte_srelu);
   using namespace transformer_engine;
-  act_fn<fp32, Empty, srelu<fp32, fp32>>(input, output, stream);
+  act_fn<NVTE_Activation_Type::SRELU, fp32, Empty, srelu<fp32, fp32>>(input, output, stream);
 }
 
 void nvte_group_srelu(const NVTEGroupedTensor input, NVTEGroupedTensor output,
@@ -103,7 +103,7 @@ void nvte_dsrelu(const NVTETensor grad, const NVTETensor input, NVTETensor outpu
                  cudaStream_t stream) {
   NVTE_API_CALL(nvte_dsrelu);
   using namespace transformer_engine;
-  dact_fn<fp32, Empty, dsrelu<fp32, fp32>>(grad, input, output, stream);
+  dact_fn<NVTE_Activation_Type::SRELU, fp32, Empty, dsrelu<fp32, fp32>>(grad, input, output, stream);
 }
 
 void nvte_group_dsrelu(const NVTEGroupedTensor grad, const NVTEGroupedTensor input,

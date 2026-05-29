@@ -153,6 +153,7 @@ list(APPEND transformer_engine_cpp_sources
      gemm/config.cpp
      normalization/common.cpp
      normalization/rtc_dispatch.cpp
+     activation/rtc_dispatch.cpp
      normalization/layernorm/ln_api.cpp
      normalization/rmsnorm/rmsnorm_api.cpp
      util/cuda_driver.cpp
@@ -448,6 +449,10 @@ make_string_header_from_file(normalization/rmsnorm/rmsnorm_fwd_kernels.cuh
                              string_code_normalization_rmsnorm_rmsnorm_fwd_kernels_cuh)
 make_string_header_from_file(normalization/rmsnorm/rmsnorm_bwd_kernels.cuh
                              string_code_normalization_rmsnorm_rmsnorm_bwd_kernels_cuh)
+
+# Activation NVRTC source (first-draft non-gated elementwise act/dact)
+make_string_header_from_file(activation/rtc/activation_kernel.cu
+                             string_code_activation_rtc_activation_kernel_cu)
 make_string_header_from_file(normalization/layernorm/rtc/ln_fwd_kernel.cu
                              string_code_normalization_layernorm_rtc_ln_fwd_kernel_cu)
 make_string_header_from_file(normalization/layernorm/rtc/ln_bwd_kernel.cu
@@ -476,6 +481,17 @@ option(NVTE_BUILD_LEGACY_STATIC_NORM
 target_compile_definitions(transformer_engine
                            PRIVATE
                            NVTE_BUILD_LEGACY_STATIC_NORM=$<BOOL:${NVTE_BUILD_LEGACY_STATIC_NORM}>)
+
+# Default ON (legacy/static) for now: this is a first-draft NVRTC activation path
+# covering only non-gated forward/backward with delayed/per-tensor (or high
+# precision) rowwise output. Set OFF to route those through NVRTC and drop their
+# template fanout from the build.
+option(NVTE_BUILD_LEGACY_STATIC_ACTIVATION
+       "Compile legacy static activation quantize dispatch instead of NVRTC for non-gated act/dact"
+       ON)
+target_compile_definitions(transformer_engine
+                           PRIVATE
+                           NVTE_BUILD_LEGACY_STATIC_ACTIVATION=$<BOOL:${NVTE_BUILD_LEGACY_STATIC_ACTIVATION}>)
 
 # Compiler options
 set(nvte_sources_with_fast_math)
