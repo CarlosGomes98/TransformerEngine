@@ -600,6 +600,8 @@ make_string_header_from_file(cast/mxfp8/specialized/quantize_mxfp8.cuh
                              string_code_cast_mxfp8_specialized_quantize_mxfp8_cuh)
 make_string_header_from_file(cast/mxfp8/specialized/rtc/quantize_mxfp8_rowwise.cu
                              string_code_cast_mxfp8_specialized_rtc_quantize_mxfp8_rowwise_cu)
+make_string_header_from_file(cast/mxfp8/specialized/rtc/quantize_mxfp8_bidimensional.cu
+                             string_code_cast_mxfp8_specialized_rtc_quantize_mxfp8_bidimensional_cu)
 
 target_include_directories(transformer_engine PRIVATE
                            "${CMAKE_CURRENT_BINARY_DIR}/string_headers")

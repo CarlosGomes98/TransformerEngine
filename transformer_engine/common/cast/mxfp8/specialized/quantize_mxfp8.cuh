@@ -23,6 +23,22 @@
 #include "ptx.cuh"
 #include "state_counter.cuh"
 #include "swizzle.cuh"
+
+// CUtensorMap / CUtensorMapSwizzle normally come from <cuda.h>, which NVRTC
+// cannot include. The bidimensional kernels only pass a CUtensorMap by value
+// (__grid_constant__) and never introspect it, and ptx.cuh's TMA ops take a
+// uint64_t*, so an ABI-compatible opaque struct (128 B, 64-B aligned, matching
+// the real CUtensorMap_st) is sufficient. The host builds the real descriptor.
+struct alignas(64) CUtensorMap_st {
+  uint64_t opaque[16];
+};
+using CUtensorMap = CUtensorMap_st;
+enum CUtensorMapSwizzle {
+  CU_TENSOR_MAP_SWIZZLE_NONE = 0,
+  CU_TENSOR_MAP_SWIZZLE_32B = 1,
+  CU_TENSOR_MAP_SWIZZLE_64B = 2,
+  CU_TENSOR_MAP_SWIZZLE_128B = 3,
+};
 #endif
 
 namespace transformer_engine {
@@ -581,12 +597,11 @@ __global__ void quantize_mxfp8_kernel_cast_only(typename CastTraits::IType *__re
       scale_stride_colwise);
 }
 
-#if !defined(__CUDACC_RTC__)
 // The 32x32 bidimensional (rowwise+colwise) kernels use TMA: CUtensorMap
-// grid-constant params and cp_async_bulk_tensor. CUtensorMap comes from
-// <cuda.h>, which NVRTC cannot include, and there is no NVRTC+TMA path in the
-// tree yet, so these remain host-compiled / static-only. Only the TMA-free
-// 1x32 rowwise cast-only kernel above is exposed to NVRTC (Phase 1).
+// grid-constant params and cp_async_bulk_tensor. Under NVRTC, CUtensorMap is
+// provided as an opaque struct (above) and the descriptor is built host-side,
+// so these are NVRTC-capable (the non-warp-specialized variant is the RTC entry
+// point; see rtc/quantize_mxfp8_bidimensional.cu).
 enum class ColwiseReduceMax : int32_t {
   Atom = 0,
   Red = 1,  // it's actually the same to Atom
@@ -1179,15 +1194,18 @@ __global__ void quantize_mxfp8_kernel_cast_only(
 #endif  // #if (defined __CUDA_ARCH__) && (__CUDA_ARCH__ >= 1000)
 }
 
-template <typename CastTraits,
-          detail::enable_if_t<CastTraits::isRowwise && CastTraits::isColwise, int> = 0,
-          detail::enable_if_t<!CastTraits::_use_warp_specialization, int> = 0>
-__global__ void quantize_mxfp8_kernel_cast_only(
-    const __grid_constant__ CUtensorMap tensor_map_input,
-    const __grid_constant__ CUtensorMap tensor_map_rowwise_output,
-    const __grid_constant__ CUtensorMap tensor_map_colwise_output, e8m0_t *scales_rowwise,
-    e8m0_t *scales_colwise, const float *noop, int32_t rows, int32_t cols,
-    int32_t scale_stride_rowwise, int32_t scale_stride_colwise) {
+// Shared device body for the 32x32 bidimensional (non-warp-specialized)
+// cast-only kernel. Extracted so both the statically-instantiated __global__
+// below and the NVRTC entry point (rtc/quantize_mxfp8_bidimensional.cu) reuse
+// it. __grid_constant__ is only valid on __global__ params, so the maps are
+// passed by const-ref here; __forceinline__ collapses this back into the global
+// so the grid-constant param addresses are preserved.
+template <typename CastTraits>
+__device__ __forceinline__ void quantize_mxfp8_bidimensional_cast_only_body(
+    const CUtensorMap &tensor_map_input, const CUtensorMap &tensor_map_rowwise_output,
+    const CUtensorMap &tensor_map_colwise_output, e8m0_t *scales_rowwise, e8m0_t *scales_colwise,
+    const float *noop, int32_t rows, int32_t cols, int32_t scale_stride_rowwise,
+    int32_t scale_stride_colwise) {
 #if (defined __CUDA_ARCH__) && (__CUDA_ARCH__ >= 1000)
   if (noop != nullptr && noop[0] == 1.0f) {
     return;
@@ -1635,7 +1653,21 @@ __global__ void quantize_mxfp8_kernel_cast_only(
 
 #endif  // #if (defined __CUDA_ARCH__) && (__CUDA_ARCH__ >= 1000)
 }
-#endif  // !__CUDACC_RTC__ (bidimensional TMA kernels)
+
+// 32x32 bidimensional cast-only kernel, non-warp-specialized (static entry point).
+template <typename CastTraits,
+          detail::enable_if_t<CastTraits::isRowwise && CastTraits::isColwise, int> = 0,
+          detail::enable_if_t<!CastTraits::_use_warp_specialization, int> = 0>
+__global__ void quantize_mxfp8_kernel_cast_only(
+    const __grid_constant__ CUtensorMap tensor_map_input,
+    const __grid_constant__ CUtensorMap tensor_map_rowwise_output,
+    const __grid_constant__ CUtensorMap tensor_map_colwise_output, e8m0_t *scales_rowwise,
+    e8m0_t *scales_colwise, const float *noop, int32_t rows, int32_t cols,
+    int32_t scale_stride_rowwise, int32_t scale_stride_colwise) {
+  quantize_mxfp8_bidimensional_cast_only_body<CastTraits>(
+      tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output, scales_rowwise,
+      scales_colwise, noop, rows, cols, scale_stride_rowwise, scale_stride_colwise);
+}
 
 }  // namespace specialized
 }  // namespace quantize_kernel

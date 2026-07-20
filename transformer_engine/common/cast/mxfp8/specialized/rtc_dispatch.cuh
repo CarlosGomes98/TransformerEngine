@@ -36,6 +36,9 @@ namespace specialized {
 // compiler (cicc) of TUs that merely launch the kernel.
 void compile_rowwise_cast_only_rtc(const std::string &kernel_label, const std::string &itype_name,
                                    const std::string &otype_name);
+void compile_bidimensional_cast_only_rtc(const std::string &kernel_label,
+                                         const std::string &itype_name,
+                                         const std::string &otype_name);
 
 // Element-type spellings used both for the __ITYPE__/__OTYPE__ substitution and
 // as part of the compiled-kernel cache key. The names must resolve inside the
@@ -97,6 +100,40 @@ inline void launch_rowwise_cast_only_rtc(IType *input, OType *output, e8m0_t *sc
   mgr.launch(kernel_label, grid, block, static_cast<unsigned int>(traits::smem), stream, input,
              output, scales_rowwise, noop, rows, cols, scale_stride_rowwise,
              scale_stride_colwise);
+}
+
+// Compile (on first use) and launch the 32x32 bidimensional cast-only kernel via
+// NVRTC. The TMA descriptors are built host-side by the caller and passed by
+// value; geometry is derived from CastTraits here.
+template <typename IType, typename OType>
+inline void launch_bidimensional_cast_only_rtc(
+    const CUtensorMap &tensor_map_input, const CUtensorMap &tensor_map_rowwise_output,
+    const CUtensorMap &tensor_map_colwise_output, e8m0_t *scales_rowwise, e8m0_t *scales_colwise,
+    const float *noop, int32_t rows, int32_t cols, int32_t scale_stride_rowwise,
+    int32_t scale_stride_colwise, cudaStream_t stream) {
+  using traits = CastTraits<IType, OType, /*rowwise=*/true, /*colwise=*/true>;
+
+  const std::string itype_name = rtc_type_name<IType>();
+  const std::string otype_name = rtc_type_name<OType>();
+  const std::string kernel_label = std::string("quantize_mxfp8_bidimensional_cast_only,itype=") +
+                                   itype_name + ",otype=" + otype_name + ",tiling=v1";
+
+  auto &mgr = rtc::KernelManager::instance();
+  if (!mgr.is_compiled(kernel_label)) {
+    compile_bidimensional_cast_only_rtc(kernel_label, itype_name, otype_name);
+  }
+
+  if (traits::smem > 0) {
+    mgr.set_function_attribute(kernel_label, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                               static_cast<int>(traits::smem));
+  }
+
+  dim3 block(traits::rowThreadLayout::num, traits::numWarps);
+  dim3 grid((cols + traits::blockDIM::N - 1) / traits::blockDIM::N,
+            (rows + traits::blockDIM::M - 1) / traits::blockDIM::M);
+  mgr.launch(kernel_label, grid, block, static_cast<unsigned int>(traits::smem), stream,
+             tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output, scales_rowwise,
+             scales_colwise, noop, rows, cols, scale_stride_rowwise, scale_stride_colwise);
 }
 
 }  // namespace specialized

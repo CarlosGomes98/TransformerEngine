@@ -15,6 +15,7 @@
 // .cpp (never compiled by cicc) avoids blowing up the device compiler in every
 // TU that merely launches the kernel.
 #include "string_code_cast_mxfp8_specialized_quantize_mxfp8_cuh.h"
+#include "string_code_cast_mxfp8_specialized_rtc_quantize_mxfp8_bidimensional_cu.h"
 #include "string_code_cast_mxfp8_specialized_rtc_quantize_mxfp8_rowwise_cu.h"
 #include "string_code_cast_mxfp8_specialized_state_counter_cuh.h"
 #include "string_code_cast_mxfp8_specialized_swizzle_cuh.h"
@@ -51,6 +52,32 @@ void compile_rowwise_cast_only_rtc(const std::string &kernel_label, const std::s
   mgr.compile(kernel_label, "quantize_mxfp8_rowwise_rtc_kernel", code,
               "transformer_engine/common/cast/mxfp8/specialized/rtc/quantize_mxfp8_rowwise.cu",
               options, headers);
+}
+
+void compile_bidimensional_cast_only_rtc(const std::string &kernel_label,
+                                         const std::string &itype_name,
+                                         const std::string &otype_name) {
+  auto &mgr = rtc::KernelManager::instance();
+  if (mgr.is_compiled(kernel_label)) {
+    return;
+  }
+
+  std::string code = string_code_cast_mxfp8_specialized_rtc_quantize_mxfp8_bidimensional_cu;
+  code = regex_replace(code, "__ITYPE__", itype_name);
+  code = regex_replace(code, "__OTYPE__", otype_name);
+
+  const std::vector<rtc::Header> headers = {
+      {string_code_cast_mxfp8_specialized_quantize_mxfp8_cuh, "specialized_quantize_mxfp8.cuh"},
+      {string_code_util_ptx_cuh, "ptx.cuh"},
+      {string_code_cast_mxfp8_specialized_state_counter_cuh, "state_counter.cuh"},
+      {string_code_cast_mxfp8_specialized_swizzle_cuh, "swizzle.cuh"},
+  };
+  const std::vector<std::string> options = {"--device-int128", "-default-device"};
+
+  mgr.compile(
+      kernel_label, "quantize_mxfp8_bidimensional_rtc_kernel", code,
+      "transformer_engine/common/cast/mxfp8/specialized/rtc/quantize_mxfp8_bidimensional.cu",
+      options, headers);
 }
 
 }  // namespace specialized

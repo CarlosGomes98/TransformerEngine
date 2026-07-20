@@ -725,11 +725,10 @@ void quantize(const Tensor &input, const Tensor *act_input, const Tensor *noop, 
                   }
                   case ScalingType::BIDIMENSIONAL: {
                     using traits = specialized::CastTraits<IType, OType, true, true>;
-                    auto kernel = specialized::quantize_mxfp8_kernel_cast_only<traits>;
 
-                    NVTE_CHECK_CUDA(cudaFuncSetAttribute(
-                        kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, traits::smem));
-                    // TMA for loading, so that we don't need STS for transposing
+                    // TMA for loading, so that we don't need STS for transposing.
+                    // The descriptors are built host-side and passed by value to
+                    // the kernel; this is identical for the NVRTC and static paths.
                     alignas(64) CUtensorMap tensor_map_input{};
                     constexpr size_t input_type_bit_size = TypeInfo<IType>::size;
                     create_2D_tensor_map(tensor_map_input, input.data, rows, cols,
@@ -751,13 +750,38 @@ void quantize(const Tensor &input, const Tensor *act_input, const Tensor *noop, 
                                          cols, 0, output_type_bit_size,
                                          traits::output_swizzle_pattern);
 
-                    dim3 block(traits::rowThreadLayout::num, traits::numWarps);
-                    dim3 grid((cols + traits::blockDIM::N - 1) / traits::blockDIM::N,
-                              (rows + traits::blockDIM::M - 1) / traits::blockDIM::M);
-                    kernel<<<grid, block, traits::smem, stream>>>(
-                        tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output,
-                        scales_rowwise_ptr, scales_colwise_ptr, noop_ptr, rows, cols,
-                        scale_stride_rowwise, scale_stride_colwise);
+#if NVTE_BUILD_LEGACY_STATIC_MXFP8
+                    const bool use_rtc = rtc::is_enabled();
+#else
+                    constexpr bool use_rtc = true;
+#endif
+                    if (use_rtc) {
+                      specialized::launch_bidimensional_cast_only_rtc<typename traits::IType,
+                                                                      typename traits::OType>(
+                          tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output,
+                          scales_rowwise_ptr, scales_colwise_ptr, noop_ptr,
+                          static_cast<int32_t>(rows), static_cast<int32_t>(cols),
+                          static_cast<int32_t>(scale_stride_rowwise),
+                          static_cast<int32_t>(scale_stride_colwise), stream);
+                    } else {
+#if NVTE_BUILD_LEGACY_STATIC_MXFP8
+                      auto kernel = specialized::quantize_mxfp8_kernel_cast_only<traits>;
+                      NVTE_CHECK_CUDA(cudaFuncSetAttribute(
+                          kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, traits::smem));
+                      dim3 block(traits::rowThreadLayout::num, traits::numWarps);
+                      dim3 grid((cols + traits::blockDIM::N - 1) / traits::blockDIM::N,
+                                (rows + traits::blockDIM::M - 1) / traits::blockDIM::M);
+                      kernel<<<grid, block, traits::smem, stream>>>(
+                          tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output,
+                          scales_rowwise_ptr, scales_colwise_ptr, noop_ptr, rows, cols,
+                          scale_stride_rowwise, scale_stride_colwise);
+#else
+                      NVTE_ERROR(
+                          "MXFP8 bidimensional specialized cast-only kernel requires NVRTC. Unset "
+                          "NVTE_DISABLE_NVRTC, or rebuild with NVTE_BUILD_LEGACY_STATIC_MXFP8=ON "
+                          "for the static fallback.");
+#endif
+                    }
 
                     break;
                   }
