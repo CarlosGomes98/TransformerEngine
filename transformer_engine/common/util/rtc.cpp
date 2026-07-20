@@ -167,10 +167,17 @@ void KernelManager::compile(const std::string& kernel_label, const std::string& 
       "-G",
 #endif
       "--std=c++17"};
+  // Blackwell (sm_100+) arch-specific / family-specific PTX features (e.g. the
+  // MXFP8 cast kernels via ARCH_BLACKWELL_FAMILY) require an arch-specific
+  // target: a bare "sm_100" leaves __CUDA_ARCH_{,FAMILY_}SPECIFIC__ undefined
+  // and trips the static_asserts in ptx.cuh. The "a" target defines both macros
+  // (superset of "f"), so it also satisfies purely generic RTC kernels, and it
+  // matches the arch the static build compiles for (compute_100a).
+  const char* arch_suffix = (compile_sm_arch >= 100) ? "a" : "";
   if (compile_ptx) {
-    opts.push_back(concat_strings("--gpu-architecture=compute_", compile_sm_arch));
+    opts.push_back(concat_strings("--gpu-architecture=compute_", compile_sm_arch, arch_suffix));
   } else {
-    opts.push_back(concat_strings("--gpu-architecture=sm_", compile_sm_arch));
+    opts.push_back(concat_strings("--gpu-architecture=sm_", compile_sm_arch, arch_suffix));
   }
   opts.push_back(concat_strings("-I", cuda::include_directory(true)));
   opts.insert(opts.end(), extra_options.begin(), extra_options.end());
