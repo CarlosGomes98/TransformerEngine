@@ -111,7 +111,7 @@ static void make_tmap(CUtensorMap *map, void *ptr, int rows, int cols, uint32_t 
 
 struct Ctx {
   std::string itype, otype, arch;
-  int rows, cols, ssr, ssc, iters;
+  int rows, cols, ssr, ssc, iters, reps;
   CUtensorMap tmap_in, tmap_row, tmap_col;
   CUdeviceptr d_sr, d_sc;
   std::string src;
@@ -120,7 +120,7 @@ struct Ctx {
 };
 struct Result {
   int ns, itn, cvt;
-  double ms, gbps;
+  double ms, gbps, spread;  // ms = min over repeats; spread = (max-min)/min in %
   bool correct, ok;
 };
 
@@ -198,21 +198,33 @@ static Result run_config(Ctx &g) {
     r.correct = (cur_row == g.ref_row) && (cur_col == g.ref_col);
   }
 
+  // Time reps independent measurements; report the min (least-noisy) and spread.
   CUevent e0, e1;
   CU(cuEventCreate(&e0, 0));
   CU(cuEventCreate(&e1, 0));
-  CU(cuEventRecord(e0, 0));
-  for (int i = 0; i < g.iters; i++) launch();
-  CU(cuEventRecord(e1, 0));
-  CU(cuEventSynchronize(e1));
-  float total = 0;
-  CU(cuEventElapsedTime(&total, e0, e1));
-  r.ms = total / g.iters;
+  double ms_min = 1e30, ms_max = 0.0;
+  for (int rep = 0; rep < g.reps; rep++) {
+    CU(cuEventRecord(e0, 0));
+    for (int i = 0; i < g.iters; i++) launch();
+    CU(cuEventRecord(e1, 0));
+    CU(cuEventSynchronize(e1));
+    float total = 0;
+    CU(cuEventElapsedTime(&total, e0, e1));
+    const double ms = total / g.iters;
+    ms_min = ms < ms_min ? ms : ms_min;
+    ms_max = ms > ms_max ? ms : ms_max;
+  }
+  r.ms = ms_min;
+  r.spread = ms_min > 0 ? (ms_max - ms_min) / ms_min * 100.0 : 0.0;
   const double bytes = (double)g.rows * g.cols * 2 * 2 + row_sz + col_sz;  // in + 2 outs approx
   r.gbps = bytes / (r.ms * 1e-3) / 1e9;
   r.ok = true;
-  printf("%-4d %-5d %-5s %10.4f %10.1f %8s\n", NS, ITN, CVT ? "4x" : "2x", r.ms, r.gbps,
-         r.correct ? "yes" : "NO");
+  printf("%-4d %-5d %-5s %10.4f %9.1f %8.1f%% %8s\n", NS, ITN, CVT ? "4x" : "2x", r.ms, r.gbps,
+         r.spread, r.correct ? "yes" : "NO");
+  // Machine-parseable per-config line (every config, every shape):
+  // CFG <rows> <cols> <itype> <otype> <ns> <itn> <cvt> <ms_min> <gbps> <spread%> <correct 0/1>
+  printf("CFG %d %d %s %s %d %d %s %.5f %.1f %.1f %d\n", g.rows, g.cols, g.itype.c_str(),
+         g.otype.c_str(), NS, ITN, CVT ? "4x" : "2x", r.ms, r.gbps, r.spread, r.correct ? 1 : 0);
   cuModuleUnload(mod);
   return r;
 }
@@ -236,7 +248,8 @@ extern "C" __global__ void __launch_bounds__(Traits::numThreads) mxfp8_bidim_aut
 
 int main(int argc, char **argv) {
   if (argc < 5) {
-    fprintf(stderr, "usage: %s <rows> <cols> <bf16|fp16> <fp8e4m3|fp8e5m2> [iters]\n", argv[0]);
+    fprintf(stderr, "usage: %s <rows> <cols> <bf16|fp16> <fp8e4m3|fp8e5m2> [iters] [reps]\n",
+            argv[0]);
     return 2;
   }
   Ctx g;
@@ -245,6 +258,7 @@ int main(int argc, char **argv) {
   g.itype = argv[3];
   g.otype = argv[4];
   g.iters = argc > 5 ? atoi(argv[5]) : 50;
+  g.reps = argc > 6 ? atoi(argv[6]) : 3;
   g.ssr = (g.cols + 31) / 32;
   g.ssc = g.cols;
   g.src = kSrc;
@@ -297,7 +311,8 @@ int main(int argc, char **argv) {
 
   printf("shape=%dx%d  %s->%s  device=sm_%d%d  iters=%d\n", g.rows, g.cols, g.itype.c_str(),
          g.otype.c_str(), ccM, ccm, g.iters);
-  printf("%-4s %-5s %-5s %10s %10s %8s\n", "ns", "itn", "cvt", "time(ms)", "GB/s", "correct");
+  printf("%-4s %-5s %-5s %10s %9s %9s %8s\n", "ns", "itn", "cvt", "min(ms)", "GB/s", "spread",
+         "correct");
 
   std::vector<Result> results;
 #define RUN(NS, ITN, CVT) results.push_back(run_config<NS, ITN, CVT>(g))
