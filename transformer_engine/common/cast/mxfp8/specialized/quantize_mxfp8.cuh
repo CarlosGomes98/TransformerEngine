@@ -189,6 +189,53 @@ struct CastTraits<_IType, _OType, /*rowwise=*/true, /*colwise=*/false> {
   static constexpr size_t smem = smem_rowwise_scale;
 };
 
+// Tunable variant of the 1x32 rowwise cast-only traits, for runtime autotuning
+// over compile-time knobs. Same layout math as CastTraits<...,true,false>, but
+// the perf-relevant parameters (warps-per-block, per-block iteration tiling, and
+// 4x-vs-2x convert) are template parameters. Defaults reproduce the shipped
+// configuration, so RowwiseTunableTraits<I,O> is layout-identical to
+// CastTraits<I,O,true,false>. The kernel body is templated on the traits, so it
+// consumes this without modification.
+template <typename _IType, typename _OType, int32_t _WARP_M = 4, int32_t _ITER_M = 1,
+          int32_t _ITER_N = 1, bool _USE_CVT_4X = true>
+struct RowwiseTunableTraits {
+  static constexpr bool isRowwise = true;
+  static constexpr bool isColwise = false;
+  using IType = _IType;
+  using OType = _OType;
+
+  static constexpr int32_t chunkElems = 32;
+  using threadLayout = Layout<1, 32>;
+  static constexpr int32_t numThreadsPerChunk = 1;
+  static constexpr int32_t warpDimM = threadLayout::M;
+  static constexpr int32_t warpDimN = threadLayout::N * chunkElems;
+  using inputUnitType = uint4;
+  static constexpr int32_t numUnitsPerChunk = chunkElems * sizeof(IType) / sizeof(inputUnitType);
+  using outputUnitType = uint4;
+  static constexpr int32_t numOutUnitsPerChunk =
+      chunkElems * sizeof(OType) / sizeof(outputUnitType);
+
+  using warpLayout = Layout<_WARP_M, 1>;
+  static constexpr int32_t blockIterDimM = warpLayout::M * warpDimM;
+  static constexpr int32_t blockIterDimN = warpLayout::N * warpDimN;
+
+  using iterLayout = Layout<_ITER_M, _ITER_N>;
+  static constexpr int32_t blockDimM = iterLayout::M * blockIterDimM;
+  static constexpr int32_t blockDimN = iterLayout::N * blockIterDimN;
+
+  static constexpr int32_t numStages = 1;
+  static constexpr int32_t numPrefetch = numStages - 1;
+
+  static constexpr bool _use_cvt_4x = _USE_CVT_4X;
+  static constexpr bool _cache_rowwise_scale_in_smem = true;
+
+  static constexpr int32_t numThreads = warpLayout::num * 32;
+
+  static constexpr size_t smem_rowwise_scale =
+      _cache_rowwise_scale_in_smem ? (blockDimM * (blockDimN / chunkElems) * sizeof(e8m0_t)) : 0ul;
+  static constexpr size_t smem = smem_rowwise_scale;
+};
+
 // 1x32
 // Shared device body for the 1x32 rowwise cast-only kernel. Extracted so both
 // the statically-instantiated __global__ below and the NVRTC entry point
@@ -610,9 +657,13 @@ enum class ColwiseReduceMax : int32_t {
   Num = 4
 };
 
-// 32x32
-template <typename _IType, typename _OType>
-struct CastTraits<_IType, _OType, /*rowwise=*/true, /*colwise=*/true> {
+// 32x32. Parameterized on the perf-relevant knobs (pipeline stages, per-block
+// iteration width, 4x-vs-2x convert) so they can be autotuned at runtime via
+// NVRTC. Defaults reproduce the shipped configuration; CastTraits<...,true,true>
+// below is exactly this with the defaults, so existing behavior is unchanged.
+template <typename _IType, typename _OType, int32_t _NumStages = 2, int32_t _IterN = 4,
+          bool _UseCvt4x = true>
+struct BidimTraitsImpl {
   static constexpr bool isRowwise = true;
   static constexpr bool isColwise = true;
   using IType = _IType;
@@ -645,10 +696,10 @@ struct CastTraits<_IType, _OType, /*rowwise=*/true, /*colwise=*/true> {
 
   using blockIterDim = Layout<warpLayout::M * warpDim::M, warpLayout::N * warpDim::N>;
 
-  using iterLayout = Layout<1, 4>;
+  using iterLayout = Layout<1, _IterN>;
   using blockDIM = Layout<iterLayout::M * blockIterDim::M, iterLayout::N * blockIterDim::N>;
 
-  static constexpr int32_t numStages = 2;
+  static constexpr int32_t numStages = _NumStages;
 
   using inputUnitType = uint4;
   static constexpr int32_t rowNumElemsPerUnit = sizeof(inputUnitType) / sizeof(IType);
@@ -667,7 +718,7 @@ struct CastTraits<_IType, _OType, /*rowwise=*/true, /*colwise=*/true> {
   using rowOutputChunkSwz = detail::conditional_t<_tma_swizzle, swz::Swizzle<2, 0, 3>, swz::Linear>;
   using colOutputSwz = detail::conditional_t<_tma_swizzle, swz::Swizzle<2, 4, 3>, swz::Linear>;
 
-  static constexpr bool _use_cvt_4x = true;
+  static constexpr bool _use_cvt_4x = _UseCvt4x;
   static constexpr bool _use_warp_specialization = false;
   static constexpr bool _need_wait_group = iterLayout::num > numStages;
   static constexpr bool _reuse_input_out_smem = false;
@@ -713,6 +764,18 @@ struct CastTraits<_IType, _OType, /*rowwise=*/true, /*colwise=*/true> {
                                      : (smemInput + smemRowwiseOutput + smemColwiseOutput +
                                         smem_alignment + smem_rowwise_scale + smem_colwise_reduce);
 };
+
+// Shipped bidimensional config: BidimTraitsImpl with the default knobs. Keeping
+// this as the CastTraits<...,true,true> specialization means all existing callers
+// and the static kernel are unchanged.
+template <typename _IType, typename _OType>
+struct CastTraits<_IType, _OType, /*rowwise=*/true, /*colwise=*/true>
+    : BidimTraitsImpl<_IType, _OType> {};
+
+// Tunable alias for runtime autotuning over (numStages, iterLayout::N, use_cvt_4x).
+template <typename IType, typename OType, int32_t NumStages = 2, int32_t IterN = 4,
+          bool UseCvt4x = true>
+using BidimTunableTraits = BidimTraitsImpl<IType, OType, NumStages, IterN, UseCvt4x>;
 
 __device__ __forceinline__ intptr_t align_to(intptr_t x, intptr_t align) {
   return (x + align - 1) & ~((align)-1);
