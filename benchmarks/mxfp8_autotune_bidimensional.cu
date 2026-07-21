@@ -264,8 +264,9 @@ int main(int argc, char **argv) {
   CU(cuInit(0));
   CUdevice dev;
   CU(cuDeviceGet(&dev, 0));
-  CUcontext ctx;
-  CU(cuCtxCreate(&ctx, 0, dev));
+  CUcontext ctx;  // primary context: signature is stable across CUDA versions
+  CU(cuDevicePrimaryCtxRetain(&ctx, dev));
+  CU(cuCtxSetCurrent(ctx));
   int ccM, ccm;
   CU(cuDeviceGetAttribute(&ccM, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev));
   CU(cuDeviceGetAttribute(&ccm, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, dev));
