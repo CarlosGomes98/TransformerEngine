@@ -56,7 +56,8 @@ void compile_rowwise_cast_only_rtc(const std::string &kernel_label, const std::s
 
 void compile_bidimensional_cast_only_rtc(const std::string &kernel_label,
                                          const std::string &itype_name,
-                                         const std::string &otype_name) {
+                                         const std::string &otype_name, int num_stages, int iter_n,
+                                         bool use_cvt_4x) {
   auto &mgr = rtc::KernelManager::instance();
   if (mgr.is_compiled(kernel_label)) {
     return;
@@ -65,6 +66,9 @@ void compile_bidimensional_cast_only_rtc(const std::string &kernel_label,
   std::string code = string_code_cast_mxfp8_specialized_rtc_quantize_mxfp8_bidimensional_cu;
   code = regex_replace(code, "__ITYPE__", itype_name);
   code = regex_replace(code, "__OTYPE__", otype_name);
+  code = regex_replace(code, "__NUM_STAGES__", std::to_string(num_stages));
+  code = regex_replace(code, "__ITER_N__", std::to_string(iter_n));
+  code = regex_replace(code, "__USE_CVT_4X__", use_cvt_4x ? "true" : "false");
 
   const std::vector<rtc::Header> headers = {
       {string_code_cast_mxfp8_specialized_quantize_mxfp8_cuh, "specialized_quantize_mxfp8.cuh"},

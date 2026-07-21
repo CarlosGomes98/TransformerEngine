@@ -38,7 +38,8 @@ void compile_rowwise_cast_only_rtc(const std::string &kernel_label, const std::s
                                    const std::string &otype_name);
 void compile_bidimensional_cast_only_rtc(const std::string &kernel_label,
                                          const std::string &itype_name,
-                                         const std::string &otype_name);
+                                         const std::string &otype_name, int num_stages, int iter_n,
+                                         bool use_cvt_4x);
 
 // Element-type spellings used both for the __ITYPE__/__OTYPE__ substitution and
 // as part of the compiled-kernel cache key. The names must resolve inside the
@@ -102,38 +103,99 @@ inline void launch_rowwise_cast_only_rtc(IType *input, OType *output, e8m0_t *sc
              scale_stride_colwise);
 }
 
-// Compile (on first use) and launch the 32x32 bidimensional cast-only kernel via
-// NVRTC. The TMA descriptors are built host-side by the caller and passed by
-// value; geometry is derived from CastTraits here.
-template <typename IType, typename OType>
-inline void launch_bidimensional_cast_only_rtc(
-    const CUtensorMap &tensor_map_input, const CUtensorMap &tensor_map_rowwise_output,
-    const CUtensorMap &tensor_map_colwise_output, e8m0_t *scales_rowwise, e8m0_t *scales_colwise,
-    const float *noop, int32_t rows, int32_t cols, int32_t scale_stride_rowwise,
-    int32_t scale_stride_colwise, cudaStream_t stream) {
-  using traits = CastTraits<IType, OType, /*rowwise=*/true, /*colwise=*/true>;
+// Per-shape compile-time config for the bidimensional kernel. Populate the table
+// in bidim_config_for() from an offline autotune sweep
+// (benchmarks/mxfp8_sweep_dsv3.sh). The default {2,4,true} reproduces the shipped
+// tiling exactly, so unlisted shapes are unchanged.
+struct BidimConfig {
+  int32_t num_stages;
+  int32_t iter_n;
+  bool use_cvt_4x;
+};
 
-  const std::string itype_name = rtc_type_name<IType>();
-  const std::string otype_name = rtc_type_name<OType>();
+inline BidimConfig bidim_config_for(int32_t rows, int32_t cols) {
+  // >>> Autotuned overrides go here, e.g.:
+  //   if (rows == 4096 && cols == 512) return {3, 2, true};
+  //   if (rows == 4096 && cols == 32768) return {2, 16, true};
+  (void)rows;
+  (void)cols;
+  return {2, 4, true};  // shipped default (== CastTraits<...,true,true>)
+}
+
+// Compile+launch one concrete bidimensional config. Geometry/smem come straight
+// from BidimTunableTraits, so every config is exactly what the JIT'd kernel uses.
+template <typename IType, typename OType, int32_t NS, int32_t ITN, bool CVT>
+inline void launch_bidim_impl(const CUtensorMap &tensor_map_input,
+                              const CUtensorMap &tensor_map_rowwise_output,
+                              const CUtensorMap &tensor_map_colwise_output, e8m0_t *scales_rowwise,
+                              e8m0_t *scales_colwise, const float *noop, int32_t rows,
+                              int32_t cols, int32_t scale_stride_rowwise,
+                              int32_t scale_stride_colwise, cudaStream_t stream,
+                              const std::string &itype_name, const std::string &otype_name) {
+  using traits = BidimTunableTraits<IType, OType, NS, ITN, CVT>;
   const std::string kernel_label = std::string("quantize_mxfp8_bidimensional_cast_only,itype=") +
-                                   itype_name + ",otype=" + otype_name + ",tiling=v1";
-
+                                   itype_name + ",otype=" + otype_name + ",ns=" + std::to_string(NS) +
+                                   ",itn=" + std::to_string(ITN) + ",cvt=" + (CVT ? "4x" : "2x");
   auto &mgr = rtc::KernelManager::instance();
   if (!mgr.is_compiled(kernel_label)) {
-    compile_bidimensional_cast_only_rtc(kernel_label, itype_name, otype_name);
+    compile_bidimensional_cast_only_rtc(kernel_label, itype_name, otype_name, NS, ITN, CVT);
   }
-
   if (traits::smem > 0) {
     mgr.set_function_attribute(kernel_label, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
                                static_cast<int>(traits::smem));
   }
-
   dim3 block(traits::rowThreadLayout::num, traits::numWarps);
   dim3 grid((cols + traits::blockDIM::N - 1) / traits::blockDIM::N,
             (rows + traits::blockDIM::M - 1) / traits::blockDIM::M);
   mgr.launch(kernel_label, grid, block, static_cast<unsigned int>(traits::smem), stream,
              tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output, scales_rowwise,
              scales_colwise, noop, rows, cols, scale_stride_rowwise, scale_stride_colwise);
+}
+
+// Compile (on first use) and launch the 32x32 bidimensional cast-only kernel via
+// NVRTC, selecting the (numStages, iterN, cvt) config for this shape. TMA
+// descriptors are built host-side by the caller (config-independent).
+template <typename IType, typename OType>
+inline void launch_bidimensional_cast_only_rtc(
+    const CUtensorMap &tensor_map_input, const CUtensorMap &tensor_map_rowwise_output,
+    const CUtensorMap &tensor_map_colwise_output, e8m0_t *scales_rowwise, e8m0_t *scales_colwise,
+    const float *noop, int32_t rows, int32_t cols, int32_t scale_stride_rowwise,
+    int32_t scale_stride_colwise, cudaStream_t stream) {
+  const std::string itype_name = rtc_type_name<IType>();
+  const std::string otype_name = rtc_type_name<OType>();
+  const BidimConfig c = bidim_config_for(rows, cols);
+
+#define NVTE_MXFP8_BIDIM_CASE(NS, ITN, CVT)                                                      \
+  if (c.num_stages == (NS) && c.iter_n == (ITN) && c.use_cvt_4x == (CVT)) {                      \
+    launch_bidim_impl<IType, OType, NS, ITN, CVT>(                                               \
+        tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output, scales_rowwise,  \
+        scales_colwise, noop, rows, cols, scale_stride_rowwise, scale_stride_colwise, stream,    \
+        itype_name, otype_name);                                                                 \
+    return;                                                                                      \
+  }
+  // Enumerated configs (must match the autotuner grid). cvt fixed at 4x.
+  NVTE_MXFP8_BIDIM_CASE(2, 1, true)
+  NVTE_MXFP8_BIDIM_CASE(2, 2, true)
+  NVTE_MXFP8_BIDIM_CASE(2, 4, true)
+  NVTE_MXFP8_BIDIM_CASE(2, 8, true)
+  NVTE_MXFP8_BIDIM_CASE(2, 16, true)
+  NVTE_MXFP8_BIDIM_CASE(3, 1, true)
+  NVTE_MXFP8_BIDIM_CASE(3, 2, true)
+  NVTE_MXFP8_BIDIM_CASE(3, 4, true)
+  NVTE_MXFP8_BIDIM_CASE(3, 8, true)
+  NVTE_MXFP8_BIDIM_CASE(3, 16, true)
+  NVTE_MXFP8_BIDIM_CASE(4, 1, true)
+  NVTE_MXFP8_BIDIM_CASE(4, 2, true)
+  NVTE_MXFP8_BIDIM_CASE(4, 4, true)
+  NVTE_MXFP8_BIDIM_CASE(4, 8, true)
+  NVTE_MXFP8_BIDIM_CASE(4, 16, true)
+#undef NVTE_MXFP8_BIDIM_CASE
+
+  // Unknown config -> shipped default.
+  launch_bidim_impl<IType, OType, 2, 4, true>(
+      tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output, scales_rowwise,
+      scales_colwise, noop, rows, cols, scale_stride_rowwise, scale_stride_colwise, stream,
+      itype_name, otype_name);
 }
 
 }  // namespace specialized

@@ -301,15 +301,25 @@ int main(int argc, char **argv) {
 
   std::vector<Result> results;
 #define RUN(NS, ITN, CVT) results.push_back(run_config<NS, ITN, CVT>(g))
-  RUN(2, 2, true);
+  // Reference first = shipped default (numStages=2, iterN=4, 4x); all other
+  // configs are checked bit-for-bit against it. cvt fixed at 4x (2x rarely wins
+  // for 2-byte input). iterN spans 1..16 to cover occupancy-limited small-N and
+  // efficiency-limited large-N regimes.
   RUN(2, 4, true);
+  RUN(2, 1, true);
+  RUN(2, 2, true);
   RUN(2, 8, true);
+  RUN(2, 16, true);
+  RUN(3, 1, true);
   RUN(3, 2, true);
   RUN(3, 4, true);
   RUN(3, 8, true);
+  RUN(3, 16, true);
+  RUN(4, 1, true);
+  RUN(4, 2, true);
   RUN(4, 4, true);
-  RUN(2, 4, false);
-  RUN(3, 4, false);
+  RUN(4, 8, true);
+  RUN(4, 16, true);
 #undef RUN
 
   std::vector<Result> ok;
@@ -318,8 +328,15 @@ int main(int argc, char **argv) {
   std::sort(ok.begin(), ok.end(), [](const Result &a, const Result &b) { return a.ms < b.ms; });
   if (!ok.empty()) {
     const Result &w = ok.front();
-    printf("\nBEST: numStages=%d iterN=%d cvt=%s  %.4f ms  %.1f GB/s\n", w.ns, w.itn,
-           w.cvt ? "4x" : "2x", w.ms, w.gbps);
+    // default (numStages=2, iterN=4, 4x) is the first entry we ran.
+    const Result &def = results.front();
+    const double speedup = (def.ok && def.correct && w.ms > 0) ? def.ms / w.ms : 1.0;
+    printf("\nBEST: numStages=%d iterN=%d cvt=%s  %.4f ms  %.1f GB/s  (%.2fx vs default)\n", w.ns,
+           w.itn, w.cvt ? "4x" : "2x", w.ms, w.gbps, speedup);
+    // Machine-parseable line for the sweep driver:
+    // TUNE <rows> <cols> <itype> <otype> <numStages> <iterN> <cvt> <ms> <gbps> <speedup>
+    printf("TUNE %d %d %s %s %d %d %s %.5f %.1f %.3f\n", g.rows, g.cols, g.itype.c_str(),
+           g.otype.c_str(), w.ns, w.itn, w.cvt ? "4x" : "2x", w.ms, w.gbps, speedup);
   } else {
     printf("\nno valid config\n");
   }

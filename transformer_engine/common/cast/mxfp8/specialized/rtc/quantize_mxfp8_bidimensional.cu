@@ -17,10 +17,12 @@ namespace specialized =
     transformer_engine::dispatch::mxfp8::quantize_kernel::specialized;  // NOLINT(*)
 
 namespace {
-// Substituted at compile time by the host dispatch.
+// Substituted at compile time by the host dispatch. Defaults (2, 4, true)
+// reproduce the shipped CastTraits<...,true,true> tiling.
 using IType = __ITYPE__;
 using OType = __OTYPE__;
-using BidimTraits = specialized::CastTraits<IType, OType, /*rowwise=*/true, /*colwise=*/true>;
+using BidimTraits =
+    specialized::BidimTunableTraits<IType, OType, __NUM_STAGES__, __ITER_N__, __USE_CVT_4X__>;
 }  // namespace
 
 // Non-template entry point so the host can request it by a stable name.
