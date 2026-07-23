@@ -185,6 +185,7 @@ list(APPEND transformer_engine_cpp_sources
      normalization/common.cpp
      normalization/rtc_dispatch.cpp
      cast/mxfp8/specialized/rtc_dispatch.cpp
+     cast/nvfp4/rtc_dispatch.cpp
      normalization/layernorm/ln_api.cpp
      normalization/rmsnorm/rmsnorm_api.cpp
      util/cuda_driver.cpp
@@ -603,6 +604,14 @@ make_string_header_from_file(cast/mxfp8/specialized/rtc/quantize_mxfp8_rowwise.c
 make_string_header_from_file(cast/mxfp8/specialized/rtc/quantize_mxfp8_bidimensional.cu
                              string_code_cast_mxfp8_specialized_rtc_quantize_mxfp8_bidimensional_cu)
 
+# NVFP4 4over6 quantize: NVRTC bundled headers + RTC source file
+make_string_header_from_file(cast/nvfp4/core_nvfp4.cuh
+                             string_code_cast_nvfp4_core_nvfp4_cuh)
+make_string_header_from_file(cast/nvfp4/quantize_4over6_nvfp4.cuh
+                             string_code_cast_nvfp4_quantize_4over6_nvfp4_cuh)
+make_string_header_from_file(cast/nvfp4/rtc/quantize_4over6.cu
+                             string_code_cast_nvfp4_rtc_quantize_4over6_cu)
+
 target_include_directories(transformer_engine PRIVATE
                            "${CMAKE_CURRENT_BINARY_DIR}/string_headers")
 
@@ -634,6 +643,16 @@ option(NVTE_BUILD_LEGACY_STATIC_MXFP8
 target_compile_definitions(transformer_engine
                            PRIVATE
                            NVTE_BUILD_LEGACY_STATIC_MXFP8=$<BOOL:${NVTE_BUILD_LEGACY_STATIC_MXFP8}>)
+
+# Default OFF: the NVFP4 4over6 quantize kernel (384-way fanout) is compiled via
+# NVRTC at runtime. Set ON to additionally statically instantiate it as the
+# fallback selected when NVTE_DISABLE_NVRTC=1.
+option(NVTE_BUILD_LEGACY_STATIC_NVFP4
+       "Also compile the static NVFP4 4over6 quantize kernel for NVTE_DISABLE_NVRTC fallback"
+       OFF)
+target_compile_definitions(transformer_engine
+                           PRIVATE
+                           NVTE_BUILD_LEGACY_STATIC_NVFP4=$<BOOL:${NVTE_BUILD_LEGACY_STATIC_NVFP4}>)
 
 # Compiler options
 set(nvte_sources_with_fast_math)
