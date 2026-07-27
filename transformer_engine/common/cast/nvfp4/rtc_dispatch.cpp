@@ -58,9 +58,11 @@ void compile_quantize_4over6_rtc(const std::string &kernel_label, const std::str
   // and <cuda_fp4.h>; forward the build's CUDA version so those are enabled.
   const std::vector<std::string> options = {"--device-int128", "-default-device",
                                             "-DCUDA_VERSION=" + std::to_string(CUDA_VERSION)};
+  constexpr rtc::ArchRequirement arch_requirement{100, rtc::ArchSpecificity::BlackwellSpecific};
 
   mgr.compile(kernel_label, "quantize_4over6_rtc_kernel", code,
-              "transformer_engine/common/cast/nvfp4/rtc/quantize_4over6.cu", options, headers);
+              "transformer_engine/common/cast/nvfp4/rtc/quantize_4over6.cu", options, headers,
+              arch_requirement);
 }
 
 }  // namespace rtc_nvfp4

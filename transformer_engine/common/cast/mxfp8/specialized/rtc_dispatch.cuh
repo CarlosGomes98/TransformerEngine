@@ -103,23 +103,30 @@ inline void launch_rowwise_cast_only_rtc(IType *input, OType *output, e8m0_t *sc
              scale_stride_colwise);
 }
 
-// Per-shape compile-time config for the bidimensional kernel. Populate the table
-// in bidim_config_for() from an offline autotune sweep
-// (benchmarks/mxfp8_sweep_dsv3.sh). The default {2,4,true} reproduces the shipped
-// tiling exactly, so unlisted shapes are unchanged.
+// Compile-time config for the bidimensional kernel.
 struct BidimConfig {
   int32_t num_stages;
   int32_t iter_n;
   bool use_cvt_4x;
 };
 
-inline BidimConfig bidim_config_for(int32_t rows, int32_t cols) {
-  // >>> Autotuned overrides go here, e.g.:
-  //   if (rows == 4096 && cols == 512) return {3, 2, true};
-  //   if (rows == 4096 && cols == 32768) return {2, 16, true};
+// Derive the default from the static kernel traits so the static and RTC paths
+// cannot drift when the shipped bidimensional configuration changes.
+template <typename IType, typename OType>
+constexpr BidimConfig static_bidim_config() {
+  using traits = CastTraits<IType, OType, /*rowwise=*/true, /*colwise=*/true>;
+  using iter_layout = typename traits::iterLayout;
+  return {traits::numStages, iter_layout::N, traits::_use_cvt_4x};
+}
+
+template <typename IType, typename OType>
+inline BidimConfig select_bidim_config(int32_t rows, int32_t cols) {
+  // No tuned bidimensional overrides are shipped yet. A future PR can expand
+  // this selector with measured shape- or dtype-specific configurations while
+  // leaving unlisted problems on the static kernel's configuration.
   (void)rows;
   (void)cols;
-  return {2, 4, true};  // shipped default (== CastTraits<...,true,true>)
+  return static_bidim_config<IType, OType>();
 }
 
 // Compile+launch one concrete bidimensional config. Geometry/smem come straight
@@ -163,17 +170,32 @@ inline void launch_bidimensional_cast_only_rtc(
     int32_t scale_stride_colwise, cudaStream_t stream) {
   const std::string itype_name = rtc_type_name<IType>();
   const std::string otype_name = rtc_type_name<OType>();
-  const BidimConfig c = bidim_config_for(rows, cols);
+  const BidimConfig config = select_bidim_config<IType, OType>(rows, cols);
+  constexpr BidimConfig default_config = static_bidim_config<IType, OType>();
+
+  // The static configuration is always supported and is the only configuration
+  // selected today.
+  if (config.num_stages == default_config.num_stages &&
+      config.iter_n == default_config.iter_n &&
+      config.use_cvt_4x == default_config.use_cvt_4x) {
+    launch_bidim_impl<IType, OType, default_config.num_stages, default_config.iter_n,
+                      default_config.use_cvt_4x>(
+        tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output, scales_rowwise,
+        scales_colwise, noop, rows, cols, scale_stride_rowwise, scale_stride_colwise, stream,
+        itype_name, otype_name);
+    return;
+  }
 
 #define NVTE_MXFP8_BIDIM_CASE(NS, ITN, CVT)                                                      \
-  if (c.num_stages == (NS) && c.iter_n == (ITN) && c.use_cvt_4x == (CVT)) {                      \
+  if (config.num_stages == (NS) && config.iter_n == (ITN) && config.use_cvt_4x == (CVT)) {       \
     launch_bidim_impl<IType, OType, NS, ITN, CVT>(                                               \
         tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output, scales_rowwise,  \
         scales_colwise, noop, rows, cols, scale_stride_rowwise, scale_stride_colwise, stream,    \
         itype_name, otype_name);                                                                 \
     return;                                                                                      \
   }
-  // Enumerated configs (must match the autotuner grid). cvt fixed at 4x.
+  // Keep candidate configurations available for a future tuning PR. The
+  // selector above does not currently choose any of them. cvt is fixed at 4x.
   NVTE_MXFP8_BIDIM_CASE(2, 1, true)
   NVTE_MXFP8_BIDIM_CASE(2, 2, true)
   NVTE_MXFP8_BIDIM_CASE(2, 4, true)
@@ -191,11 +213,8 @@ inline void launch_bidimensional_cast_only_rtc(
   NVTE_MXFP8_BIDIM_CASE(4, 16, true)
 #undef NVTE_MXFP8_BIDIM_CASE
 
-  // Unknown config -> shipped default.
-  launch_bidim_impl<IType, OType, 2, 4, true>(
-      tensor_map_input, tensor_map_rowwise_output, tensor_map_colwise_output, scales_rowwise,
-      scales_colwise, noop, rows, cols, scale_stride_rowwise, scale_stride_colwise, stream,
-      itype_name, otype_name);
+  NVTE_ERROR("Unsupported MXFP8 bidimensional RTC config: num_stages=", config.num_stages,
+             ", iter_n=", config.iter_n, ", use_cvt_4x=", config.use_cvt_4x);
 }
 
 }  // namespace specialized

@@ -633,12 +633,11 @@ target_compile_definitions(transformer_engine
                            PRIVATE
                            NVTE_BUILD_LEGACY_STATIC_NORM=$<BOOL:${NVTE_BUILD_LEGACY_STATIC_NORM}>)
 
-# Default OFF: the 1x32 rowwise MXFP8 specialized cast-only kernel is compiled
-# via NVRTC at runtime. Set ON to additionally statically instantiate it as the
-# fallback selected when NVTE_DISABLE_NVRTC=1. (The 32x32 bidimensional TMA
-# kernel is always statically compiled; it is not migrated to NVRTC yet.)
+# Default OFF: the 1x32 rowwise and 32x32 bidimensional MXFP8 specialized
+# cast-only kernels are compiled via NVRTC at runtime. Set ON to additionally
+# instantiate their static fallbacks for NVTE_DISABLE_NVRTC=1.
 option(NVTE_BUILD_LEGACY_STATIC_MXFP8
-       "Also compile the static rowwise MXFP8 cast-only kernel for NVTE_DISABLE_NVRTC fallback"
+       "Also compile static specialized MXFP8 cast-only kernels for NVTE_DISABLE_NVRTC fallback"
        OFF)
 target_compile_definitions(transformer_engine
                            PRIVATE

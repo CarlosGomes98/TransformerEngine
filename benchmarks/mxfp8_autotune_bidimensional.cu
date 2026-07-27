@@ -113,10 +113,10 @@ struct Ctx {
   std::string itype, otype, arch;
   int rows, cols, ssr, ssc, iters, reps;
   CUtensorMap tmap_in, tmap_row, tmap_col;
-  CUdeviceptr d_sr, d_sc;
+  CUdeviceptr d_rowout, d_colout, d_sr, d_sc;
   std::string src;
   std::vector<const char *> hsrc, hname;
-  std::vector<uint8_t> ref_row, ref_col;
+  std::vector<uint8_t> ref_rowout, ref_colout, ref_sr, ref_sc;
 };
 struct Result {
   int ns, itn, cvt;
@@ -175,6 +175,17 @@ static Result run_config(Ctx &g) {
     return cuLaunchKernel(fn, gx, gy, 1, bx, by, 1, (unsigned)smem, 0, args, nullptr);
   };
 
+  const size_t output_sz = (size_t)g.rows * g.cols;
+  const size_t row_scale_sz = (size_t)g.rows * g.ssr;
+  const size_t col_scale_sz = (size_t)((g.rows + 31) / 32) * g.cols;
+  auto initialize_outputs = [&](uint8_t sentinel) {
+    CU(cuMemsetD8(g.d_rowout, sentinel, output_sz));
+    CU(cuMemsetD8(g.d_colout, sentinel, output_sz));
+    CU(cuMemsetD8(g.d_sr, sentinel, row_scale_sz));
+    CU(cuMemsetD8(g.d_sc, sentinel, col_scale_sz));
+  };
+  initialize_outputs(0xA5);
+
   CUresult lr = launch();
   if (lr != CUDA_SUCCESS) {
     const char *s;
@@ -185,17 +196,37 @@ static Result run_config(Ctx &g) {
   }
   CU(cuCtxSynchronize());
 
-  const size_t row_sz = (size_t)g.rows * g.ssr;
-  const size_t col_sz = (size_t)((g.rows + 31) / 32) * g.cols;
-  std::vector<uint8_t> cur_row(row_sz), cur_col(col_sz);
-  CU(cuMemcpyDtoH(cur_row.data(), g.d_sr, row_sz));
-  CU(cuMemcpyDtoH(cur_col.data(), g.d_sc, col_sz));
-  if (g.ref_row.empty()) {
-    g.ref_row = cur_row;
-    g.ref_col = cur_col;
-    r.correct = true;
+  std::vector<uint8_t> cur_rowout(output_sz), cur_colout(output_sz);
+  std::vector<uint8_t> cur_sr(row_scale_sz), cur_sc(col_scale_sz);
+  auto copy_outputs = [&](std::vector<uint8_t> &rowout, std::vector<uint8_t> &colout,
+                          std::vector<uint8_t> &sr, std::vector<uint8_t> &sc) {
+    CU(cuMemcpyDtoH(rowout.data(), g.d_rowout, output_sz));
+    CU(cuMemcpyDtoH(colout.data(), g.d_colout, output_sz));
+    CU(cuMemcpyDtoH(sr.data(), g.d_sr, row_scale_sz));
+    CU(cuMemcpyDtoH(sc.data(), g.d_sc, col_scale_sz));
+  };
+  copy_outputs(cur_rowout, cur_colout, cur_sr, cur_sc);
+
+  // Launch again from different sentinel contents. Comparing the two results
+  // detects any output or scale bytes that the kernel leaves unwritten.
+  initialize_outputs(0x5A);
+  CU(launch());
+  CU(cuCtxSynchronize());
+  std::vector<uint8_t> check_rowout(output_sz), check_colout(output_sz);
+  std::vector<uint8_t> check_sr(row_scale_sz), check_sc(col_scale_sz);
+  copy_outputs(check_rowout, check_colout, check_sr, check_sc);
+  const bool fully_written = (cur_rowout == check_rowout) && (cur_colout == check_colout) &&
+                             (cur_sr == check_sr) && (cur_sc == check_sc);
+
+  if (g.ref_rowout.empty()) {
+    g.ref_rowout = cur_rowout;
+    g.ref_colout = cur_colout;
+    g.ref_sr = cur_sr;
+    g.ref_sc = cur_sc;
+    r.correct = fully_written;
   } else {
-    r.correct = (cur_row == g.ref_row) && (cur_col == g.ref_col);
+    r.correct = fully_written && (cur_rowout == g.ref_rowout) &&
+                (cur_colout == g.ref_colout) && (cur_sr == g.ref_sr) && (cur_sc == g.ref_sc);
   }
 
   // Time reps independent measurements; report the min (least-noisy) and spread.
@@ -216,7 +247,8 @@ static Result run_config(Ctx &g) {
   }
   r.ms = ms_min;
   r.spread = ms_min > 0 ? (ms_max - ms_min) / ms_min * 100.0 : 0.0;
-  const double bytes = (double)g.rows * g.cols * 2 * 2 + row_sz + col_sz;  // in + 2 outs approx
+  const double bytes =
+      (double)g.rows * g.cols * 2 * 2 + row_scale_sz + col_scale_sz;  // in + 2 outs approx
   r.gbps = bytes / (r.ms * 1e-3) / 1e9;
   r.ok = true;
   printf("%-4d %-5d %-5s %10.4f %9.1f %8.1f%% %8s\n", NS, ITN, CVT ? "4x" : "2x", r.ms, r.gbps,
@@ -287,10 +319,10 @@ int main(int argc, char **argv) {
   g.arch = "sm_" + std::to_string(ccM * 10 + ccm) + "a";
 
   // Device buffers.
-  CUdeviceptr d_in, d_rowout, d_colout;
+  CUdeviceptr d_in;
   CU(cuMemAlloc(&d_in, (size_t)g.rows * g.cols * 2));
-  CU(cuMemAlloc(&d_rowout, (size_t)g.rows * g.cols));
-  CU(cuMemAlloc(&d_colout, (size_t)g.rows * g.cols));
+  CU(cuMemAlloc(&g.d_rowout, (size_t)g.rows * g.cols));
+  CU(cuMemAlloc(&g.d_colout, (size_t)g.rows * g.cols));
   CU(cuMemAlloc(&g.d_sr, (size_t)g.rows * g.ssr));
   CU(cuMemAlloc(&g.d_sc, (size_t)((g.rows + 31) / 32) * g.cols));
   {
@@ -304,9 +336,9 @@ int main(int argc, char **argv) {
   const uint32_t boxM = 32, boxN = 64;
   make_tmap(&g.tmap_in, (void *)d_in, g.rows, g.cols, boxM, boxN, 16,
             CU_TENSOR_MAP_SWIZZLE_128B);
-  make_tmap(&g.tmap_row, (void *)d_rowout, g.rows, g.cols, boxM, boxN, 8,
+  make_tmap(&g.tmap_row, (void *)g.d_rowout, g.rows, g.cols, boxM, boxN, 8,
             CU_TENSOR_MAP_SWIZZLE_64B);
-  make_tmap(&g.tmap_col, (void *)d_colout, g.rows, g.cols, boxM, boxN, 8,
+  make_tmap(&g.tmap_col, (void *)g.d_colout, g.rows, g.cols, boxM, boxN, 8,
             CU_TENSOR_MAP_SWIZZLE_64B);
 
   printf("shape=%dx%d  %s->%s  device=sm_%d%d  iters=%d\n", g.rows, g.cols, g.itype.c_str(),

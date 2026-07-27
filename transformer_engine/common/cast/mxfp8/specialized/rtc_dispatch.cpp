@@ -48,10 +48,11 @@ void compile_rowwise_cast_only_rtc(const std::string &kernel_label, const std::s
   // --device-int128: ptx.cuh uses __uint128_t; -default-device: treat the
   // unannotated constexpr/inline helpers in ptx.cuh as __device__ under JIT.
   const std::vector<std::string> options = {"--device-int128", "-default-device"};
+  constexpr rtc::ArchRequirement arch_requirement{100, rtc::ArchSpecificity::BlackwellSpecific};
 
   mgr.compile(kernel_label, "quantize_mxfp8_rowwise_rtc_kernel", code,
               "transformer_engine/common/cast/mxfp8/specialized/rtc/quantize_mxfp8_rowwise.cu",
-              options, headers);
+              options, headers, arch_requirement);
 }
 
 void compile_bidimensional_cast_only_rtc(const std::string &kernel_label,
@@ -77,11 +78,12 @@ void compile_bidimensional_cast_only_rtc(const std::string &kernel_label,
       {string_code_cast_mxfp8_specialized_swizzle_cuh, "swizzle.cuh"},
   };
   const std::vector<std::string> options = {"--device-int128", "-default-device"};
+  constexpr rtc::ArchRequirement arch_requirement{100, rtc::ArchSpecificity::BlackwellSpecific};
 
   mgr.compile(
       kernel_label, "quantize_mxfp8_bidimensional_rtc_kernel", code,
       "transformer_engine/common/cast/mxfp8/specialized/rtc/quantize_mxfp8_bidimensional.cu",
-      options, headers);
+      options, headers, arch_requirement);
 }
 
 }  // namespace specialized
