@@ -15,8 +15,6 @@
 #include <cmath>
 #include <cstdint>
 #else
-// NVRTC build: the integer typedefs and detail::is_same come from utils.cuh,
-// which is injected as an in-memory header before this file is included.
 #include "utils.cuh"
 #endif
 
@@ -50,6 +48,7 @@ __host__ __device__ __forceinline__ constexpr T shiftr(T x) {
   }
 }
 
+// avoid use of standard math lib to preserve NVRTC compatibility
 template <int32_t BBits, int32_t MBase, int32_t SShift>
 struct Swizzle {
   static constexpr int32_t num_bits = BBits;   // number of rows

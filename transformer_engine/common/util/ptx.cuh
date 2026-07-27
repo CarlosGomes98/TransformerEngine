@@ -25,10 +25,7 @@
 #include "common/utils.cuh"
 #else
 // NVRTC build: common.h drags in host-only headers (cuDNN etc.) and cannot be
-// compiled by NVRTC. utils.cuh (injected as an in-memory header) already
-// provides the uint typedefs, detail::is_same/conditional_t, fp8*/e8m0_t and
-// Quantized_Limits; here we only add the fp16/bf16 aliases and the FP4 macro
-// that would otherwise come from common.h.
+// compiled by NVRTC. 
 #ifndef FP4_TYPE_SUPPORTED
 #define FP4_TYPE_SUPPORTED (CUDA_VERSION >= 12080)
 #endif

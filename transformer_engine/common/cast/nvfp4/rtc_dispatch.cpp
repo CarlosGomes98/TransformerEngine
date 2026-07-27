@@ -17,7 +17,9 @@
 #include "string_code_cast_nvfp4_core_nvfp4_cuh.h"
 #include "string_code_cast_nvfp4_quantize_4over6_nvfp4_cuh.h"
 #include "string_code_cast_nvfp4_rtc_quantize_4over6_cu.h"
+#include "string_code_transformer_engine_nvfp4_4over6_h.h"
 #include "string_code_util_ptx_cuh.h"
+#include "string_code_util_type_extrema_h.h"
 
 namespace transformer_engine {
 namespace dispatch {
@@ -49,6 +51,8 @@ void compile_quantize_4over6_rtc(const std::string &kernel_label, const std::str
       {string_code_cast_nvfp4_quantize_4over6_nvfp4_cuh, "quantize_4over6_nvfp4.cuh"},
       {string_code_cast_nvfp4_core_nvfp4_cuh, "core_nvfp4.cuh"},
       {string_code_util_ptx_cuh, "ptx.cuh"},
+      {string_code_util_type_extrema_h, "util/type_extrema.h"},
+      {string_code_transformer_engine_nvfp4_4over6_h, "transformer_engine/nvfp4_4over6.h"},
   };
 
   // --device-int128: ptx.cuh uses __uint128_t; -default-device: treat the

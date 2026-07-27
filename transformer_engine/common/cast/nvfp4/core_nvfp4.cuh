@@ -32,9 +32,9 @@
 // used by get_rbits for the transpose kernels) cannot be parsed by NVRTC.
 // utils.cuh, util/math.h and ptx.cuh are injected as in-memory headers by the
 // RTC dispatch and already provide the integer typedefs, detail::is_same/min/max
-// and the fp8/fp4 element types. Add the transformer_engine-namespace fp4 aliases
-// and the detail::TypeExtrema specializations used by the 4over6 kernel, which
-// would otherwise come from common.h.
+// and the fp8 element types. util/type_extrema.h (also injected) provides the
+// transformer_engine-namespace fp4 aliases and detail::TypeExtrema
+// specializations that would otherwise come from common.h.
 #include "util/math.h"
 #include "ptx.cuh"
 #include "utils.cuh"
@@ -44,36 +44,7 @@
 #endif  // FP4_TYPE_SUPPORTED
 
 namespace transformer_engine {
-#if FP4_TYPE_SUPPORTED
-using fp4e2m1 = __nv_fp4_e2m1;
-using fp4e2m1x2 = __nv_fp4x2_e2m1;
-#endif  // FP4_TYPE_SUPPORTED
-
-namespace detail {
-
-template <typename T>
-struct TypeExtrema;
-
-#if FP4_TYPE_SUPPORTED
-template <>
-struct TypeExtrema<fp4e2m1> {
-  static constexpr float max = 6.0f;
-  static constexpr float max_inverse = 1.0 / max;
-};
-#endif  // FP4_TYPE_SUPPORTED
-
-template <>
-struct TypeExtrema<fp8e4m3> {
-  static constexpr float max = 448.0f;
-  static constexpr float max_inverse = 1.0 / max;
-};
-
-template <>
-struct TypeExtrema<float> {
-  static constexpr float max = 0x1.fffffep127f;  // FLT_MAX
-};
-
-}  // namespace detail
+#include "util/type_extrema.h"
 }  // namespace transformer_engine
 #endif  // __CUDACC_RTC__
 
@@ -145,9 +116,6 @@ __device__ __forceinline__ float compute_global_encode_scaling_factor_FP4(const 
 }
 
 #if !defined(__CUDACC_RTC__)
-// RNG helper for the transpose kernels; depends on curanddx (host-only under
-// NVRTC). The 4over6 kernel does not use stochastic rounding, so this is not
-// needed in the NVRTC translation unit.
 __device__ __forceinline__ uint32_t get_rbits(
     transformer_engine::curanddx::detail::philox4x32_native_state<NVTE_BUILD_NUM_PHILOX_ROUNDS>
         &rng,

@@ -4,11 +4,7 @@
  * See LICENSE for license information.
  ************************************************************************/
 
-// NVRTC source file for the NVFP4 4over6 quantize kernel. The host bundles this
-// (and the device headers it needs) as in-memory strings; the 8 fanout axes are
-// substituted at runtime via the __ITYPE__/__USE_2D__/__RETURN_IDENTITY__/
-// __RETURN_TRANSPOSE__/__ROW_SCALED__/__MODE__/__ERR_FAST_MATH__/__E4M3_MAX__
-// placeholders (see rtc_dispatch).
+// NVRTC source file for the NVFP4 4over6 quantize kernel
 
 #include "quantize_4over6_nvfp4.cuh"
 
@@ -22,7 +18,6 @@ using IType = __ITYPE__;
 using Cfg = Config<__MODE__, __ERR_FAST_MATH__>;
 }  // namespace
 
-// Non-template entry point so the host can request it by a stable name.
 __global__ void __launch_bounds__(kThreads) quantize_4over6_rtc_kernel(
     const IType *input, fp4e2m1x2 *output, fp4e2m1x2 *output_t, nvfp4_scale_t *scales,
     nvfp4_scale_t *scales_t, const float *amax_rowwise, const float *amax_colwise,

@@ -189,53 +189,6 @@ struct CastTraits<_IType, _OType, /*rowwise=*/true, /*colwise=*/false> {
   static constexpr size_t smem = smem_rowwise_scale;
 };
 
-// Tunable variant of the 1x32 rowwise cast-only traits, for runtime autotuning
-// over compile-time knobs. Same layout math as CastTraits<...,true,false>, but
-// the perf-relevant parameters (warps-per-block, per-block iteration tiling, and
-// 4x-vs-2x convert) are template parameters. Defaults reproduce the shipped
-// configuration, so RowwiseTunableTraits<I,O> is layout-identical to
-// CastTraits<I,O,true,false>. The kernel body is templated on the traits, so it
-// consumes this without modification.
-template <typename _IType, typename _OType, int32_t _WARP_M = 4, int32_t _ITER_M = 1,
-          int32_t _ITER_N = 1, bool _USE_CVT_4X = true>
-struct RowwiseTunableTraits {
-  static constexpr bool isRowwise = true;
-  static constexpr bool isColwise = false;
-  using IType = _IType;
-  using OType = _OType;
-
-  static constexpr int32_t chunkElems = 32;
-  using threadLayout = Layout<1, 32>;
-  static constexpr int32_t numThreadsPerChunk = 1;
-  static constexpr int32_t warpDimM = threadLayout::M;
-  static constexpr int32_t warpDimN = threadLayout::N * chunkElems;
-  using inputUnitType = uint4;
-  static constexpr int32_t numUnitsPerChunk = chunkElems * sizeof(IType) / sizeof(inputUnitType);
-  using outputUnitType = uint4;
-  static constexpr int32_t numOutUnitsPerChunk =
-      chunkElems * sizeof(OType) / sizeof(outputUnitType);
-
-  using warpLayout = Layout<_WARP_M, 1>;
-  static constexpr int32_t blockIterDimM = warpLayout::M * warpDimM;
-  static constexpr int32_t blockIterDimN = warpLayout::N * warpDimN;
-
-  using iterLayout = Layout<_ITER_M, _ITER_N>;
-  static constexpr int32_t blockDimM = iterLayout::M * blockIterDimM;
-  static constexpr int32_t blockDimN = iterLayout::N * blockIterDimN;
-
-  static constexpr int32_t numStages = 1;
-  static constexpr int32_t numPrefetch = numStages - 1;
-
-  static constexpr bool _use_cvt_4x = _USE_CVT_4X;
-  static constexpr bool _cache_rowwise_scale_in_smem = true;
-
-  static constexpr int32_t numThreads = warpLayout::num * 32;
-
-  static constexpr size_t smem_rowwise_scale =
-      _cache_rowwise_scale_in_smem ? (blockDimM * (blockDimN / chunkElems) * sizeof(e8m0_t)) : 0ul;
-  static constexpr size_t smem = smem_rowwise_scale;
-};
-
 // 1x32
 // Shared device body for the 1x32 rowwise cast-only kernel. Extracted so both
 // the statically-instantiated __global__ below and the NVRTC entry point

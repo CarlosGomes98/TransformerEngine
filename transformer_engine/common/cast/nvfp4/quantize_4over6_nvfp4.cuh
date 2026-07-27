@@ -38,16 +38,12 @@
 #else
 // NVRTC build: the host-only headers above (common.h, transformer_engine.h,
 // rtc.h) are unavailable. core_nvfp4.cuh pulls the injected utils.cuh /
-// util/math.h / ptx.cuh in its own RTC branch and provides the fp4 aliases +
-// detail::TypeExtrema. The NVTENVFP44Over6Mode enum normally comes from
-// transformer_engine.h; mirror it here so Config and compute_error_rn resolve.
-#include "core_nvfp4.cuh"
+// util/math.h / ptx.cuh / util/type_extrema.h in its own RTC branch and
+// provides the fp4 aliases + detail::TypeExtrema. NVTENVFP44Over6Mode comes
+// from the device-safe public header, which is injected by rtc_dispatch.
+#include <transformer_engine/nvfp4_4over6.h>
 
-enum NVTENVFP44Over6Mode {
-  kNVTENVFP44Over6Disabled = 0,
-  kNVTENVFP44Over6MinMAE = 1,
-  kNVTENVFP44Over6MinMSE = 2,
-};
+#include "core_nvfp4.cuh"
 #endif  // __CUDACC_RTC__
 
 namespace transformer_engine {

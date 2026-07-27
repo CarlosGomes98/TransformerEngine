@@ -18,9 +18,8 @@
 #include <string>
 
 #include "../../util/rtc.h"
-// NB: do not include util/string.h here — it pulls in <regex>, which is heavy
-// enough to ICE the device compiler (cicc) when this header is parsed inside a
-// large .cu TU. Label building uses plain std::string; regex_replace lives in
+// do not include util/string.h here — it pulls in <regex>, which is heavy.
+// Label building uses plain std::string; regex_replace lives in
 // the host-only rtc_dispatch.cpp.
 #include "core_nvfp4.cuh"
 
@@ -29,18 +28,12 @@ namespace dispatch {
 namespace nvfp4 {
 namespace rtc_nvfp4 {
 
-// Compile (if not already cached) the 4over6 RTC kernel for the given 8-axis
-// configuration. Defined in rtc_dispatch.cpp, a host-only translation unit, so
-// the large embedded kernel sources are never parsed by the device compiler
-// (cicc) of TUs that merely launch the kernel.
 void compile_quantize_4over6_rtc(const std::string &kernel_label, const std::string &itype_name,
                                  bool use_2d, bool return_identity, bool return_transpose,
                                  bool row_scaled, const std::string &mode_name, bool err_fast_math,
                                  int e4m3_max);
 
-// Element-type spelling used both for the __ITYPE__ substitution and as part of
-// the compiled-kernel cache key. The names must resolve inside the NVRTC
-// translation unit (see ptx.cuh / utils.cuh RTC aliases).
+
 template <typename T>
 inline const char *rtc_type_name() {
   return detail::type_name<T>();
@@ -66,10 +59,6 @@ inline const char *rtc_mode_name(NVTENVFP44Over6Mode mode) {
   }
 }
 
-// Compile (on first use) and launch the 4over6 kernel via NVRTC. Geometry (grid,
-// block, dynamic shared memory) is computed host-side by launch_quantize_4over6
-// exactly as the static launch does and passed through here; the actual NVRTC
-// compilation lives in the host-only .cpp.
 template <bool USE_2D_QUANTIZATION, typename Cfg, int E4M3_MAX, typename IType>
 inline void launch_quantize_4over6_rtc(const IType *input, fp4e2m1x2 *output, fp4e2m1x2 *output_t,
                                        nvfp4_scale_t *scales, nvfp4_scale_t *scales_t,

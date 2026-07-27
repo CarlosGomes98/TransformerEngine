@@ -80,10 +80,8 @@ inline void launch_rowwise_cast_only_rtc(IType *input, OType *output, e8m0_t *sc
   const std::string itype_name = rtc_type_name<IType>();
   const std::string otype_name = rtc_type_name<OType>();
 
-  // The cache key encodes everything that varies the compiled kernel. Bump the
-  // tiling tag when the traits geometry becomes runtime-selectable (Phase 2).
   const std::string kernel_label = std::string("quantize_mxfp8_rowwise_cast_only,itype=") +
-                                   itype_name + ",otype=" + otype_name + ",tiling=v1";
+                                   itype_name + ",otype=" + otype_name;
 
   auto &mgr = rtc::KernelManager::instance();
   if (!mgr.is_compiled(kernel_label)) {
@@ -121,8 +119,8 @@ constexpr BidimConfig static_bidim_config() {
 
 template <typename IType, typename OType>
 inline BidimConfig select_bidim_config(int32_t rows, int32_t cols) {
-  // No tuned bidimensional overrides are shipped yet. A future PR can expand
-  // this selector with measured shape- or dtype-specific configurations while
+  // No tuned bidimensional overrides are shipped for now. In the future,
+  // this selector can be expanded with measured shape- or dtype-specific configurations while
   // leaving unlisted problems on the static kernel's configuration.
   (void)rows;
   (void)cols;
