@@ -4,14 +4,12 @@
  * See LICENSE for license information.
  ************************************************************************/
 
-/*! \file rtc_dispatch.cuh
+/*! \file rtc_dispatch.h
  *  \brief Host-side NVRTC dispatch for the NVFP4 4over6 quantize kernel.
  */
 
-#ifndef TRANSFORMER_ENGINE_CAST_NVFP4_RTC_DISPATCH_CUH_
-#define TRANSFORMER_ENGINE_CAST_NVFP4_RTC_DISPATCH_CUH_
-
-#if !defined(__CUDACC_RTC__)
+#ifndef TRANSFORMER_ENGINE_CAST_NVFP4_RTC_DISPATCH_H_
+#define TRANSFORMER_ENGINE_CAST_NVFP4_RTC_DISPATCH_H_
 
 #include <cuda.h>
 
@@ -30,7 +28,6 @@ void compile_quantize_4over6_rtc(const std::string &kernel_label, const std::str
                                  bool use_2d, bool return_identity, bool return_transpose,
                                  bool row_scaled, const std::string &mode_name, bool err_fast_math,
                                  int e4m3_max);
-
 
 template <typename T>
 inline const char *rtc_type_name() {
@@ -99,6 +96,4 @@ inline void launch_quantize_4over6_rtc(const IType *input, fp4e2m1x2 *output, fp
 }  // namespace dispatch
 }  // namespace transformer_engine
 
-#endif  // !__CUDACC_RTC__
-
-#endif  // TRANSFORMER_ENGINE_CAST_NVFP4_RTC_DISPATCH_CUH_
+#endif  // TRANSFORMER_ENGINE_CAST_NVFP4_RTC_DISPATCH_H_
